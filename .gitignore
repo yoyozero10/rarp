@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.rarp/
+.env
+.env.*
+!.env.example
+*.log
+.squad-smoke/
+router-model-test/
