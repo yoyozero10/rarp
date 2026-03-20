@@ -25,6 +25,8 @@ Trạng thái: đã triển khai và kiểm thử local. CLI chuyển trạng th
 
 ## M2 — Runtime và một worker thật
 
+Trạng thái 2026-10-23: đã có runtime nền single-owner, API loopback có token, dispatch một task, adapter Codex, log theo attempt và timeout/cancel/stop. Test Codex thật tạo file giỏ hàng và submitted thành công. Trạng thái chờ tương tác chưa hỗ trợ do adapter non-interactive; process-tree cleanup đã kiểm chứng với cây thông thường, chưa bảo đảm tiến trình cố ý tách cây. Crash reconciliation thuộc M4.
+
 - Runtime start/status/stop; khóa tránh hai runtime cùng dự án.
 - Adapter Codex: start, structured events, kết thúc lượt, lỗi, timeout, cancellation.
 - Phân biệt starting/ready/working/waiting_input/waiting_permission/idle/exited/failed.
@@ -67,8 +69,8 @@ Trạng thái: đã triển khai và kiểm thử local. CLI chuyển trạng th
 
 ## Việc tiếp theo
 
-1. Kiểm tra giao thức output của các CLI đang cài trước khi triển khai M2.
-2. Xây runtime single-owner và adapter Codex.
-3. Kiểm chứng timeout, cancellation và dừng toàn bộ cây tiến trình Windows.
+1. Bổ sung adapter Antigravity và vòng nghiệm thu tự động ở M3.
+2. Trước tác vụ dài không giám sát: containment tiến trình Windows và crash reconciliation.
+3. Bổ sung giao thức waiting_input/waiting_permission khi có adapter tương tác.
 
 Không cam kết lịch theo ngày trước spike M2: độ ổn định adapter và vòng đời tiến trình Windows là hai yếu tố chưa được đo đủ.
