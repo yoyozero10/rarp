@@ -4,7 +4,7 @@ CLI điều phối nhiều AI agent trên máy local: lập kế hoạch, giao v
 
 ## Trạng thái
 
-Phase 2 đã triển khai: SQLite, task/dependency, attempt, review, durable events, runtime local và worker Codex. Chưa có vòng review tự động, adapter khác hay UI.
+Phase 3: SQLite, task/dependency, attempt, review, events, runtime local, worker Codex/Antigravity và vòng review–sửa tự động có giới hạn. Chưa có UI, worktree isolation hoặc crash recovery.
 
 ## Phát triển
 
@@ -92,3 +92,21 @@ node scripts/smoke-phase2.mjs
 ```
 
 Kết quả kiểm chứng ngày 2026-10-23: worker tạo cart.json đúng số liệu, task submitted, runtime stop thành công. CI chỉ chạy fixtures giả lập, không dùng tài khoản/model thật.
+
+## Phase 3: workflow tự review và sửa
+
+```sh
+node dist/cli/index.js runtime start
+node dist/cli/index.js workflow run TASK_ID --adapter antigravity --max-rounds 3 --timeout-ms 120000 --total-timeout-ms 600000
+node dist/cli/index.js runtime status
+node dist/cli/index.js task show TASK_ID --json
+node dist/cli/index.js runtime stop
+```
+
+`--adapter codex` là mặc định. Có thể chọn `--agy PATH` khi start runtime. Manager hiện dùng Codex ở sandbox read-only, độc lập với worker. Manager nhận yêu cầu gốc và báo cáo worker, kiểm tra file rồi trả JSON theo `schemas/review.json`; Rarp kiểm tra lại bằng Zod. Quyết định bắt buộc có feedback và evidence. Model review vẫn có thể đánh giá sai; cần kiểm thử phù hợp trước khi tích hợp code quan trọng.
+
+`changes_requested` được lưu cùng evidence rồi chuyển thành feedback cho attempt mới. Hết max-rounds thì task giữ `changes_requested`; manager có thể đưa lại queued thủ công. Output review không hợp lệ, timeout, quyền công cụ bị từ chối hoặc cancel sẽ dừng workflow, không tự retry lỗi hạ tầng và không tự accept. Lỗi trong review chuyển task sang failed nhưng giữ nguyên attempt đã submitted. Events phân biệt worker.output và review.output, cùng task/attempt ID.
+
+Một workflow chạy từng worker/reviewer nối tiếp trong cùng thư mục. Chưa tự phân rã mục tiêu, tự nhận task từ queue, chạy nhiều worker song song hoặc phục hồi vòng đang chạy sau crash. Task dependency vẫn cần accepted trước khi dispatch.
+
+Antigravity mặc định dùng sandbox, không tự bỏ duyệt quyền. Headless có thể trả SUCCESS nhưng kèm denied_actions; adapter coi đây là thất bại. Script kiểm thử thật `node scripts/smoke-phase3.mjs` chạy hai task nối tiếp qua Antigravity và Codex; `--codex-only` thử riêng Codex. Tùy chọn `--allow-agy-auto-approve` chỉ dành cho bài test tạm khi người dùng cho phép rõ ràng: nó thêm dangerously-skip-permissions cho tiến trình Antigravity đó, không sửa cấu hình lâu dài và không phải một sandbox giới hạn thư mục.

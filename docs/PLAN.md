@@ -34,6 +34,8 @@ Trạng thái 2026-10-23: đã có runtime nền single-owner, API loopback có 
 
 ## M3 — Vòng nghiệm thu và nhiều loại agent
 
+Triển khai 2026-10-24: adapter Antigravity, workflow run, Codex reviewer read-only với JSON Schema, feedback qua các attempt, giới hạn vòng/thời gian và cancel/stop toàn vòng. Có 21 test local, gồm cố ý sai rồi sửa, vượt giới hạn, JSON review lỗi và deadline/cancel/stop khi review. Test live và điều kiện quyền Antigravity xem docs/PHASE3-VALIDATION.md.
+
 - Adapter Antigravity; manager nhận sự kiện submitted và trả accepted/changes_requested với feedback.
 - Runtime chờ sự kiện và kích hoạt lượt tiếp; giới hạn số lần sửa, thời gian và retry.
 - Đạt khi manager giao worker tạo giỏ hàng, nghiệm thu, giao giảm giá; chạy thêm tình huống cố ý sai để chứng minh vòng sửa. Hai loại CLI hoàn tất, dừng sạch, không cần nhắc tiếp trong bài thử có giới hạn.
@@ -69,7 +71,7 @@ Trạng thái 2026-10-23: đã có runtime nền single-owner, API loopback có 
 
 ## Việc tiếp theo
 
-1. Bổ sung adapter Antigravity và vòng nghiệm thu tự động ở M3.
+1. M4: worktree cho worker, tích hợp và kiểm tra code thật.
 2. Trước tác vụ dài không giám sát: containment tiến trình Windows và crash reconciliation.
 3. Bổ sung giao thức waiting_input/waiting_permission khi có adapter tương tác.
 
