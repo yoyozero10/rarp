@@ -1,8 +1,24 @@
+import { fileURLToPath } from "node:url";
+export function codexReviewCommand(file = "codex"): CommandSpec {
+  const command = codexCommand(file, "read-only");
+  command.args.splice(
+    -1,
+    0,
+    "--output-schema",
+    fileURLToPath(new URL("../../schemas/review.json", import.meta.url)),
+  );
+  return command;
+}
 export interface CommandSpec {
   file: string;
   args: string[];
+  protocol?: "codex" | "antigravity";
+  promptArgument?: boolean;
 }
-export function codexCommand(file = "codex"): CommandSpec {
+export function codexCommand(
+  file = "codex",
+  sandbox = "workspace-write",
+): CommandSpec {
   return {
     file,
     args: [
@@ -14,7 +30,7 @@ export function codexCommand(file = "codex"): CommandSpec {
       "--ephemeral",
       "--skip-git-repo-check",
       "--sandbox",
-      "workspace-write",
+      sandbox,
       "--color",
       "never",
       "-",
@@ -27,6 +43,7 @@ export class CodexStream {
   completed = false;
   failed = false;
   result = "";
+  failureReason = "";
   constructor(private emit: (event: Record<string, unknown>) => void) {}
   feed(chunk: string) {
     this.buffer += chunk;
