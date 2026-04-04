@@ -37,7 +37,7 @@ program
   .command("about")
   .action(() =>
     console.log(
-      "Rarp Phase 2: persistent tasks, local runtime and a Codex worker. Automated review is planned for Phase 3.",
+      "Rarp Phase 3: Codex/Antigravity workers and bounded automatic review workflows.",
     ),
   );
 program
@@ -96,11 +96,12 @@ runtime
     "Codex executable (not a shell command)",
     "codex",
   )
-  .action(async (options: { codex: string }) => {
+  .option("--agy <executable>", "Antigravity executable", "agy")
+  .action(async (options: { codex: string; agy: string }) => {
     const root = resolve(program.opts()["project"] as string);
     const child = fork(
       fileURLToPath(new URL("../runtime/daemon.js", import.meta.url)),
-      [root, options.codex],
+      [root, options.codex, options.agy],
       {
         detached: true,
         windowsHide: true,
@@ -152,15 +153,18 @@ program
   .command("worker")
   .command("run <taskId>")
   .option("--timeout-ms <ms>", "Maximum execution time", "120000")
-  .action(async (taskId: string, options: { timeoutMs: string }) =>
-    console.log(
-      JSON.stringify(
-        await runtimeRequest(program.opts()["project"] as string, "run", {
-          taskId,
-          timeoutMs: Number(options.timeoutMs),
-        }),
+  .option("--adapter <name>", "codex or antigravity", "codex")
+  .action(
+    async (taskId: string, options: { timeoutMs: string; adapter: string }) =>
+      console.log(
+        JSON.stringify(
+          await runtimeRequest(program.opts()["project"] as string, "run", {
+            taskId,
+            timeoutMs: Number(options.timeoutMs),
+            adapter: options.adapter,
+          }),
+        ),
       ),
-    ),
   );
 runtime
   .command("cancel")
@@ -170,6 +174,39 @@ runtime
         await runtimeRequest(program.opts()["project"] as string, "cancel", {}),
       ),
     ),
+  );
+program
+  .command("workflow")
+  .command("run <taskId>")
+  .option("--adapter <name>", "Worker: codex or antigravity", "codex")
+  .option("--max-rounds <n>", "Maximum worker/review rounds", "3")
+  .option("--timeout-ms <ms>", "Timeout per agent invocation", "120000")
+  .option("--total-timeout-ms <ms>", "Overall workflow deadline", "600000")
+  .action(
+    async (
+      taskId: string,
+      options: {
+        adapter: string;
+        maxRounds: string;
+        timeoutMs: string;
+        totalTimeoutMs: string;
+      },
+    ) =>
+      console.log(
+        JSON.stringify(
+          await runtimeRequest(
+            program.opts()["project"] as string,
+            "workflow",
+            {
+              taskId,
+              adapter: options.adapter,
+              maxRounds: Number(options.maxRounds),
+              timeoutMs: Number(options.timeoutMs),
+              totalTimeoutMs: Number(options.totalTimeoutMs),
+            },
+          ),
+        ),
+      ),
   );
 try {
   await program.parseAsync();
