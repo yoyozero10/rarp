@@ -4,13 +4,16 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { Store } from "../storage/store.js";
-import { codexCommand } from "../adapters/codex.js";
+import { codexCommand, codexReviewCommand } from "../adapters/codex.js";
 import type { CommandSpec } from "../adapters/codex.js";
 import { runWorker } from "./process.js";
+import { antigravityCommand } from "../adapters/antigravity.js";
+import { runWorkflow } from "./workflow.js";
 
 export async function startRuntime(
   rootInput: string,
   command: CommandSpec = codexCommand(),
+  adapters: { antigravity?: CommandSpec; manager?: CommandSpec } = {},
 ) {
   const root = realpathSync(rootInput);
   const store = new Store(root);
@@ -32,7 +35,11 @@ export async function startRuntime(
     | {
         taskId: string;
         attemptId: string;
-        worker: ReturnType<typeof runWorker>;
+        worker: {
+          pid: number | undefined;
+          cancel: () => Promise<unknown>;
+          snapshot?: () => {attemptId:string;stage:string;round:number;pid:number|undefined};
+        };
         settled: Promise<void>;
       }
     | undefined;
@@ -46,8 +53,9 @@ export async function startRuntime(
     active: active
       ? {
           taskId: active.taskId,
-          attemptId: active.attemptId,
+          attemptId: active.worker.snapshot?.().attemptId ?? active.attemptId,
           pid: active.worker.pid,
+          workflow: active.worker.snapshot?.(),
         }
       : null,
     last,
@@ -107,7 +115,7 @@ export async function startRuntime(
         reply(snapshot());
         return;
       }
-      if (req.url !== "/run") {
+      if (req.url !== "/run" && req.url !== "/workflow") {
         reply({ error: "Unknown route" }, 404);
         return;
       }
@@ -120,6 +128,14 @@ export async function startRuntime(
         .object({
           taskId: z.string().min(1),
           timeoutMs: z.number().int().min(100).max(3600000).default(120000),
+          adapter: z.enum(["codex", "antigravity"]).default("codex"),
+          maxRounds: z.number().int().min(1).max(10).default(3),
+          totalTimeoutMs: z
+            .number()
+            .int()
+            .min(100)
+            .max(3600000)
+            .default(600000),
         })
         .parse(JSON.parse(body));
       if (stopping || active) throw new Error("Runtime busy or stopping");
@@ -131,9 +147,44 @@ export async function startRuntime(
         "Dispatched by runtime",
       );
       const attemptId = String(running.attempts.at(-1)!["id"]);
+      const selected =
+        input.adapter === "antigravity"
+          ? (adapters.antigravity ?? antigravityCommand())
+          : command;
+      if (req.url === "/workflow") {
+        const worker = runWorkflow(
+          store,
+          root,
+          task.id,
+          selected,
+          adapters.manager ?? codexReviewCommand(command.file),
+          input,
+          attemptId,
+        );
+        const settled = worker.done
+          .then((result) => {
+            last = result;
+          })
+          .catch((error) => {
+            cleanupError = error;
+            stopping = true;
+            last = { taskId: task.id, state: "failed", error: String(error) };
+          })
+          .finally(() => {
+            active = undefined;
+          });
+        active = { taskId: task.id, attemptId, worker, settled };
+        reply(snapshot(), 202);
+        return;
+      }
       const prompt = `You are a bounded Rarp worker. Work only in this project. Do not launch other agents or change .rarp state. Complete the task and report results; manager reviews separately.\nTitle: ${task.title}\n${task.body}`;
-      const worker = runWorker(command, root, prompt, input.timeoutMs, (data) =>
-        store.recordWorkerEvent(task.id, attemptId, task.assigned_to, data),
+      const worker = runWorker(
+        selected,
+        root,
+        prompt,
+        input.timeoutMs,
+        (data) =>
+          store.recordWorkerEvent(task.id, attemptId, task.assigned_to, data),
       );
       const settled = worker.done
         .then((result) => {
