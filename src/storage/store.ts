@@ -198,7 +198,8 @@ export class Store {
       if (!transitions[task.status].includes(next))
         throw new Error(`Invalid transition: ${task.status} -> ${next}`);
       const workerAction =
-        ["running", "submitted", "failed"].includes(next) ||
+        (["running", "submitted", "failed"].includes(next) &&
+          task.status !== "reviewing") ||
         (next === "blocked" && task.status === "running");
       if (workerAction) {
         if (agent["role"] !== "worker" || task.assigned_to !== actor)
@@ -262,6 +263,24 @@ export class Store {
   }
   events() {
     return this.db.prepare("SELECT * FROM events ORDER BY id").all();
+  }
+  recordReviewEvent(
+    taskId: string,
+    attemptId: string,
+    actor: string,
+    data: unknown,
+  ) {
+    this.transaction(() => {
+      if (this.task(taskId).created_by !== actor)
+        throw new Error("Reviewer mismatch");
+      if (
+        !this.db
+          .prepare("SELECT id FROM attempts WHERE id=? AND task_id=?")
+          .get(attemptId, taskId)
+      )
+        throw new Error("Review attempt mismatch");
+      this.event("review.output", actor, taskId, attemptId, data);
+    });
   }
   recordWorkerEvent(
     taskId: string,
