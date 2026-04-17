@@ -32,7 +32,7 @@ process.once(
   },
 );
 process.on("disconnect", () => {
-  // Best effort cleanup if the runtime disappears. Full crash reconciliation is M4.
+  // Best effort cleanup if the runtime disappears; recovery refuses a live host.
   if (process.platform === "win32")
     spawn("taskkill", ["/PID", String(process.pid), "/T", "/F"], {
       windowsHide: true,
