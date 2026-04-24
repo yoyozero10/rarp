@@ -4,7 +4,7 @@ CLI điều phối nhiều AI agent trên máy local: lập kế hoạch, giao v
 
 ## Trạng thái
 
-Phase 4 bổ sung Git worktree riêng cho worker, kiểm tra scope, commit/test evidence, tích hợp tuần tự và recovery có lease/idempotency. Giữ các chức năng Phase 3: SQLite, task/dependency, review và worker Codex/Antigravity. Chưa có UI. Kiểm thử live Phase 4 hiện bị chặn bởi hạn mức Codex; không coi fixture là nghiệm thu model thật.
+Phase 4 bổ sung Git worktree riêng cho worker, kiểm tra scope, commit/test evidence, tích hợp tuần tự và recovery có lease/idempotency. Giữ các chức năng Phase 3: SQLite, task/dependency, review và worker Codex/Antigravity. Chưa có UI. Kiểm thử live hai worker nối tiếp bằng GPT-6.1 Sol đã đạt; xem [kiểm chứng Phase 4](docs/PHASE4-VALIDATION.md). Mỗi dự án hiện chạy tối đa một worker tại một thời điểm.
 
 ## Phát triển
 
