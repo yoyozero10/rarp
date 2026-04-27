@@ -7,6 +7,15 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Store } from "../dist/storage/store.js";
 import { startRuntime, runtimeRequest } from "../dist/runtime/server.js";
 import { git } from "../dist/runtime/workspace.js";
+import { codexCommand, codexReviewCommand } from "../dist/adapters/codex.js";
+const modelIndex = process.argv.indexOf("--model");
+const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : undefined;
+if (modelIndex >= 0 && (!model || model.startsWith("--")))
+  throw new Error("--model requires a model ID");
+const withModel = (spec) => {
+  if (model) spec.args.splice(-1, 0, "--model", model);
+  return spec;
+};
 const root = mkdtempSync(join(tmpdir(), "rarp-phase4-"));
 git(root, "init");
 git(root, "config", "user.name", "Rarp smoke");
@@ -58,8 +67,16 @@ const runtime = fixture
   ? await startRuntime(root, command("feature-worker"), {
       manager: command("feature-manager"),
     })
-  : await startRuntime(root);
-console.log(JSON.stringify({ root, tasks: [first.id, second.id] }));
+  : await startRuntime(root, withModel(codexCommand()), {
+      manager: withModel(codexReviewCommand()),
+    });
+console.log(
+  JSON.stringify({
+    root,
+    model: model ?? "CLI default",
+    tasks: [first.id, second.id],
+  }),
+);
 try {
   for (const [task, scope, check] of [
     [
