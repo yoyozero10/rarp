@@ -4,7 +4,30 @@ CLI điều phối nhiều AI agent trên máy local: lập kế hoạch, giao v
 
 ## Trạng thái
 
-Phase 4 bổ sung Git worktree riêng cho worker, kiểm tra scope, commit/test evidence, tích hợp tuần tự và recovery có lease/idempotency. Giữ các chức năng Phase 3: SQLite, task/dependency, review và worker Codex/Antigravity. Chưa có UI. Kiểm thử live hai worker nối tiếp bằng GPT-6.1 Sol đã đạt; xem [kiểm chứng Phase 4](docs/PHASE4-VALIDATION.md). Mỗi dự án hiện chạy tối đa một worker tại một thời điểm.
+Phase 5 đã có dashboard React local: task board, agent, dependency, timeline, diff/test evidence và các thao tác điều khiển. Snapshot nhất quán và SSE có cursor hỗ trợ reconnect. Giữ worktree/recovery của Phase 4; [kiểm chứng Phase 4](docs/PHASE4-VALIDATION.md) đã đạt bằng GPT-6.1 Sol. Mỗi dự án hiện chạy tối đa một worker tại một thời điểm.
+
+## Phase 5: dashboard local
+
+```powershell
+npm ci
+npm run build
+node dist/cli/index.js runtime start
+node dist/cli/index.js ui
+```
+
+Mở liên kết được in bởi `ui` trong trình duyệt. Dự án cần `init` và agent như hướng dẫn bên dưới. Dashboard được phục vụ từ chính runtime, không cần Vite dev server. Token nằm trong URL fragment, được xóa khỏi thanh địa chỉ sau khi đọc và giữ trong sessionStorage của tab để reload; không đưa liên kết này vào issue hoặc chia sẻ công khai. Runtime chỉ bind `127.0.0.1`, không hỗ trợ truy cập từ xa.
+
+UI cho phép đăng ký agent, tạo task/dependency, chạy workflow trong worktree riêng, dừng workflow, đưa task lại queued, đổi worker, review thủ công, hủy task và tích hợp commit. Mọi thao tác hiển thị pending/succeeded/failed; lỗi đầu vào hoặc trạng thái cũ không được báo thành công. Actor vẫn là ID trong môi trường local tin cậy, không phải hệ thống tài khoản đa người dùng.
+
+Đóng UI không dừng runtime. Khi mở lại, snapshot và cursor tải trạng thái hiện tại; stream reconnect tiếp từ sự kiện đã nhận. Tổng quan giữ tối đa 200 sự kiện; log theo task có phân trang (100 mỗi trang, tối đa 1.000 trong bộ nhớ UI). Lịch sử đầy đủ vẫn nằm trong SQLite/CLI. Quan hệ dependency được trình bày bằng các cạnh có thể chọn, chưa có canvas kéo/thả. Diff giới hạn 2 MiB và hiển thị commit checkpoint, không phải thay đổi chưa commit. Lệnh verification/merge vẫn chạy đồng bộ như Phase 4 nên có thể làm UI chờ phản hồi.
+
+Chạy demo tạm, không gọi model trả phí:
+
+```powershell
+node scripts/demo-phase5.mjs
+```
+
+Demo in thư mục repository tạm và URL dashboard; dùng fixture cho worker/reviewer. `Ctrl+C` dừng demo. Xem [kiểm chứng Phase 5](docs/PHASE5-VALIDATION.md).
 
 ## Phát triển
 

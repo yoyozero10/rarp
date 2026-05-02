@@ -52,6 +52,8 @@ Trạng thái 2026-10-24: đã có worktree theo task, scope, checkpoint commit,
 
 ## M5 — UI quan sát
 
+Trạng thái 2026-10-24: đã triển khai dashboard React local, snapshot nhất quán, SSE replay/cursor, log phân trang, dependency edges, diff/evidence và thao tác điều khiển. Xem docs/PHASE5-VALIDATION.md. Canvas kéo/thả và nhiều worker song song là mở rộng riêng.
+
 - API snapshot và event stream, auth local, reconnect cursor, phân trang log.
 - Dashboard React: agent list, task board, graph dependencies, timeline và diff/test evidence.
 - Thêm thao tác cancel/reassign/approve với trạng thái pending/succeeded/failed.
@@ -73,7 +75,7 @@ Trạng thái 2026-10-24: đã có worktree theo task, scope, checkpoint commit,
 
 ## Việc tiếp theo
 
-1. M5: API snapshot/event stream và UI quan sát.
+1. Mở rộng sau M5: scheduler nhiều worker và benchmark tải/log thực tế.
 2. Trước tác vụ dài không giám sát: containment tiến trình Windows mạnh hơn và mở rộng kiểm chứng crash recovery.
 3. Bổ sung giao thức waiting_input/waiting_permission khi có adapter tương tác.
 
