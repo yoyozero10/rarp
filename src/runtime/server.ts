@@ -16,6 +16,7 @@ import { runWorker } from "./process.js";
 import { antigravityCommand } from "../adapters/antigravity.js";
 import { runWorkflow } from "./workflow.js";
 import { prepareWorkspace, integrateWorkspace } from "./workspace.js";
+import { observer, serveDashboard } from "./observer.js";
 
 export async function startRuntime(
   rootInput: string,
@@ -93,6 +94,7 @@ export async function startRuntime(
       : null,
     last,
   });
+  const observation = observer(store, snapshot);
   async function stop() {
     if (closed) return;
     stopping = true;
@@ -101,6 +103,7 @@ export async function startRuntime(
       await active.settled;
     }
     if (cleanupError) throw cleanupError;
+    observation.close();
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );
@@ -116,10 +119,27 @@ export async function startRuntime(
       res.end(JSON.stringify(data));
     };
     try {
+      const address = server.address();
+      const origin =
+        address && typeof address !== "string"
+          ? `http://127.0.0.1:${address.port}`
+          : "";
+      if (
+        req.headers.host !== origin.slice(7) ||
+        (req.headers.origin && req.headers.origin !== origin)
+      ) {
+        reply({ error: "Invalid host or origin" }, 403);
+        return;
+      }
+      const url = new URL(req.url ?? "/", origin);
+      res.setHeader("x-content-type-options", "nosniff");
+      res.setHeader("cache-control", "no-store");
+      if (req.method === "GET" && serveDashboard(url.pathname, res)) return;
       if (req.headers.authorization !== `Bearer ${token}`) {
         reply({ error: "Unauthorized" }, 401);
         return;
       }
+      if (observation.handle(req, res, url)) return;
       if (req.method === "GET" && req.url === "/status") {
         reply(snapshot());
         return;
@@ -142,6 +162,16 @@ export async function startRuntime(
         return;
       }
       if (req.url === "/cancel") {
+        let cancelBody = "";
+        for await (const chunk of req) {
+          cancelBody += String(chunk);
+          if (cancelBody.length > 4096) throw new Error("Request too large");
+        }
+        const cancelInput = z
+          .object({ taskId: z.string().optional() })
+          .parse(JSON.parse(cancelBody || "{}"));
+        if (cancelInput.taskId && active?.taskId !== cancelInput.taskId)
+          throw new Error("Active task changed; refresh before cancelling");
         if (active) {
           await active.worker.cancel();
           await active.settled;
@@ -152,7 +182,10 @@ export async function startRuntime(
       if (
         req.url !== "/run" &&
         req.url !== "/workflow" &&
-        req.url !== "/integrate"
+        req.url !== "/integrate" &&
+        !["/tasks", "/transition", "/reassign", "/agents"].includes(
+          req.url ?? "",
+        )
       ) {
         reply({ error: "Unknown route" }, 404);
         return;
@@ -160,7 +193,66 @@ export async function startRuntime(
       let body = "";
       for await (const chunk of req) {
         body += String(chunk);
-        if (body.length > 4096) throw new Error("Request too large");
+        if (body.length > 32768) throw new Error("Request too large");
+      }
+      if (
+        ["/tasks", "/transition", "/reassign", "/agents"].includes(
+          req.url ?? "",
+        )
+      ) {
+        if (stopping) throw new Error("Runtime stopping");
+        const data = JSON.parse(body);
+        if (req.url === "/tasks") {
+          reply(store.create(data));
+          return;
+        }
+        if (req.url === "/agents") {
+          const input = z
+            .object({ id: z.string(), role: z.string() })
+            .parse(data);
+          reply(store.register(input.id, input.role));
+          return;
+        }
+        const input = z
+          .object({
+            taskId: z.string(),
+            actor: z.string(),
+            expectedStatus: z.string(),
+            note: z.string().min(1).max(20000),
+            status: z.string().optional(),
+            assignee: z.string().optional(),
+          })
+          .parse(data);
+        if (active?.taskId === input.taskId)
+          throw new Error(
+            "Cancel the active workflow before changing this task",
+          );
+        if (store.show(input.taskId).status !== input.expectedStatus)
+          throw new Error("Task changed; refresh before retrying");
+        if (req.url === "/reassign") {
+          if (!input.assignee) throw new Error("assignee required");
+          reply(
+            store.reassign(
+              input.taskId,
+              input.actor,
+              input.assignee,
+              input.expectedStatus,
+            ),
+          );
+          return;
+        }
+        if (!input.status || ["running", "submitted"].includes(input.status))
+          throw new Error("Use workflow to run or submit work");
+        reply(
+          store.transition(
+            input.taskId,
+            input.status,
+            input.actor,
+            input.note,
+            input.expectedStatus,
+          ),
+        );
+        return;
       }
       if (req.url === "/integrate") {
         if (stopping || active) throw new Error("Runtime busy or stopping");
