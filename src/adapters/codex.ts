@@ -12,7 +12,7 @@ export function codexReviewCommand(file = "codex"): CommandSpec {
 export interface CommandSpec {
   file: string;
   args: string[];
-  protocol?: "codex" | "antigravity";
+  protocol?: "codex" | "antigravity" | "check";
   promptArgument?: boolean;
 }
 export function codexCommand(
