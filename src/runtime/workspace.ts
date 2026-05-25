@@ -123,41 +123,40 @@ export function verifyWorkspace(workspace: Workspace) {
     throw new Error("Verification changed workspace files");
   return output || "Verification command passed";
 }
-export function integrateWorkspace(root: string, workspace: Workspace) {
+interface IntegrationPlan {
+  before: string;
+  path: string;
+  commit: string;
+  done?: string;
+}
+function planIntegration(root: string, workspace: Workspace): IntegrationPlan {
   if (!workspace.commit) throw new Error("No reviewed commit");
+  const before = git(root, "rev-parse", "HEAD");
   if (workspace.integrated) {
     git(root, "merge-base", "--is-ancestor", workspace.integrated, "HEAD");
-    return workspace.integrated;
+    return { before, path: root, commit: before, done: workspace.integrated };
   }
   if (git(root, "status", "--porcelain"))
     throw new Error("Main checkout must be clean");
-  // Recovery after a fast-forward but before the database update must not merge twice.
   const ancestor = spawnSync(
     "git",
     ["-C", root, "merge-base", "--is-ancestor", workspace.commit, "HEAD"],
     { windowsHide: true },
   );
-  if (ancestor.status === 0) {
-    workspace.integrationEvidence = verifyWorkspace({
-      ...workspace,
-      path: root,
-    });
-    return git(root, "rev-parse", "HEAD");
-  }
-  const before = git(root, "rev-parse", "HEAD");
-  const target = join(root, ".rarp", "integrations", workspace.taskId);
-  if (existsSync(target)) {
-    if (git(target, "status", "--porcelain"))
+  if (ancestor.status === 0) return { before, path: root, commit: before };
+  const path = join(root, ".rarp", "integrations", workspace.taskId);
+  if (existsSync(path)) {
+    if (git(path, "status", "--porcelain"))
       throw new Error(
         "Integration conflict/edits remain; inspect and resolve in integration workspace",
       );
-    git(target, "merge-base", "--is-ancestor", before, "HEAD");
-    git(target, "merge-base", "--is-ancestor", workspace.commit, "HEAD");
+    git(path, "merge-base", "--is-ancestor", before, "HEAD");
+    git(path, "merge-base", "--is-ancestor", workspace.commit, "HEAD");
   } else {
-    git(root, "worktree", "add", "--detach", target, before);
-    // Conflicts remain in this isolated directory, leaving the main checkout unchanged.
+    git(root, "worktree", "add", "--detach", path, before);
+    // Conflicts stay outside the main checkout for explicit inspection/resolution.
     git(
-      target,
+      path,
       "-c",
       "user.name=Rarp",
       "-c",
@@ -171,16 +170,49 @@ export function integrateWorkspace(root: string, workspace: Workspace) {
       workspace.commit,
     );
   }
-  workspace.integrationEvidence = verifyWorkspace({
-    ...workspace,
-    path: target,
-  });
-  const merged = git(target, "rev-parse", "HEAD");
+  return { before, path, commit: git(path, "rev-parse", "HEAD") };
+}
+function finishIntegration(root: string, plan: IntegrationPlan) {
   if (
-    git(root, "rev-parse", "HEAD") !== before ||
+    git(root, "rev-parse", "HEAD") !== plan.before ||
     git(root, "status", "--porcelain")
   )
     throw new Error("Main checkout changed during integration");
-  git(root, "-c", "core.hooksPath=/dev/null", "merge", "--ff-only", merged);
-  return merged;
+  if (
+    git(plan.path, "rev-parse", "HEAD") !== plan.commit ||
+    git(plan.path, "status", "--porcelain")
+  )
+    throw new Error("Integration workspace changed during verification");
+  if (plan.path !== root)
+    git(
+      root,
+      "-c",
+      "core.hooksPath=/dev/null",
+      "merge",
+      "--ff-only",
+      plan.commit,
+    );
+  return plan.commit;
+}
+export function integrateWorkspace(root: string, workspace: Workspace) {
+  const plan = planIntegration(root, workspace);
+  if (plan.done) return plan.done;
+  workspace.integrationEvidence = verifyWorkspace({
+    ...workspace,
+    path: plan.path,
+  });
+  return finishIntegration(root, plan);
+}
+export async function integrateWorkspaceAsync(
+  root: string,
+  workspace: Workspace,
+  verify: (workspace: Workspace) => Promise<string>,
+) {
+  const plan = planIntegration(root, workspace);
+  if (plan.done) return plan.done;
+  workspace.integrationEvidence = await verify({
+    ...workspace,
+    path: plan.path,
+  });
+  return finishIntegration(root, plan);
 }

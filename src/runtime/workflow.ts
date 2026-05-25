@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Store } from "../storage/store.js";
 import type { CommandSpec } from "../adapters/codex.js";
 import { runWorker } from "./process.js";
-import { checkpoint, verifyWorkspace, git } from "./workspace.js";
+import { checkpoint, git } from "./workspace.js";
 import type { Workspace } from "./workspace.js";
 
 export const reviewSchema = z
@@ -25,10 +25,12 @@ export function runWorkflow(
     resumeReview?: boolean;
     workspace?: Workspace;
     onSpawn?: (pid: number) => void;
+    acquireReview?: (signal: AbortSignal) => Promise<() => void>;
   },
   initialAttempt: string,
 ) {
   let cancelled = false;
+  const cancellation = new AbortController();
   let current: ReturnType<typeof runWorker> | undefined;
   let stage = "working";
   let attemptId = initialAttempt;
@@ -45,25 +47,44 @@ export function runWorkflow(
     review: boolean,
   ) {
     check();
-    stage = review ? "reviewing" : "working";
-    current = runWorker(
-      command,
-      root,
-      prompt,
-      Math.max(1, Math.min(options.timeoutMs, deadline - Date.now())),
-      (event) => {
-        if (review)
-          store.recordReviewEvent(taskId, attemptId, task.created_by, event);
-        else
-          store.recordWorkerEvent(taskId, attemptId, task.assigned_to, event);
-      },
-      options.onSpawn,
-    );
-    const result = await current.done;
-    current = undefined;
-    check();
-    if (!result.success) throw new Error(result.note);
-    return result.note;
+    let release: (() => void) | undefined;
+    if (review && options.acquireReview) {
+      stage = "waiting_review";
+      release = await options.acquireReview(
+        AbortSignal.any([
+          cancellation.signal,
+          AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+        ]),
+      );
+    }
+    try {
+      check();
+      stage = review
+        ? "reviewing"
+        : command.protocol === "check"
+          ? "verifying"
+          : "working";
+      current = runWorker(
+        command,
+        root,
+        prompt,
+        Math.max(1, Math.min(options.timeoutMs, deadline - Date.now())),
+        (event) => {
+          if (review)
+            store.recordReviewEvent(taskId, attemptId, task.created_by, event);
+          else
+            store.recordWorkerEvent(taskId, attemptId, task.assigned_to, event);
+        },
+        options.onSpawn,
+      );
+      const result = await current.done;
+      current = undefined;
+      check();
+      if (!result.success) throw new Error(result.note);
+      return result.note;
+    } finally {
+      release?.();
+    }
   }
   const done = (async () => {
     try {
@@ -93,7 +114,19 @@ export function runWorkflow(
             checkpoint(options.workspace);
             store.saveWorkspace(options.workspace);
           }
-          output += "\nVerification: " + verifyWorkspace(options.workspace);
+          output +=
+            "\nVerification: " +
+            (await execute(
+              {
+                file: options.workspace.check[0]!,
+                args: options.workspace.check.slice(1),
+                protocol: "check",
+              },
+              "",
+              false,
+            ));
+          if (git(root, "status", "--porcelain"))
+            throw new Error("Verification changed workspace files");
         }
         const now = store.show(taskId);
         if (
@@ -204,6 +237,7 @@ export function runWorkflow(
     done,
     cancel: async () => {
       cancelled = true;
+      cancellation.abort();
       if (current) await current.cancel();
       await done;
     },
