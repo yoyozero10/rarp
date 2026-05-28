@@ -12,6 +12,7 @@ import {
 } from "../core/task.js";
 import type { Task } from "../core/task.js";
 import type { Workspace } from "../runtime/workspace.js";
+import type { Dispatch } from "../core/dispatch.js";
 
 const migration = `
 CREATE TABLE projects(id TEXT PRIMARY KEY, root TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -46,18 +47,24 @@ export class Store {
         const version = this.db.prepare("PRAGMA user_version").get()![
           "user_version"
         ];
-        if (version !== 0 && version !== 1 && version !== 2)
+        if (version !== 0 && version !== 1 && version !== 2 && version !== 3)
           throw new Error(`Unsupported database version: ${version}`);
         if (version === 0) {
           if (!initialize) throw new Error("Database not initialized.");
           this.db.exec(migration);
         }
-        if (version !== 2)
+        if (Number(version) < 2)
           this.db.exec(`
           CREATE TABLE workspaces(task_id TEXT PRIMARY KEY REFERENCES tasks(id), data TEXT NOT NULL);
           CREATE TABLE runs(id TEXT PRIMARY KEY, request_key TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id), owner TEXT NOT NULL, runtime_pid INTEGER NOT NULL, host_pid INTEGER, lease_until INTEGER NOT NULL, state TEXT NOT NULL, result TEXT);
           CREATE UNIQUE INDEX active_task_run ON runs(task_id) WHERE state='active';
           PRAGMA user_version=2;
+        `);
+        if (Number(version) < 3)
+          this.db.exec(`
+          CREATE TABLE dispatches(request_key TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), state TEXT NOT NULL, data TEXT NOT NULL);
+          CREATE UNIQUE INDEX pending_dispatch ON dispatches(task_id) WHERE state IN ('waiting','active');
+          PRAGMA user_version=3;
         `);
         const project = this.db
           .prepare("SELECT id FROM projects LIMIT 1")
@@ -79,6 +86,44 @@ export class Store {
   }
   close() {
     this.db.close();
+  }
+  dispatch(key: string): Dispatch | undefined {
+    const row = this.db
+      .prepare("SELECT data FROM dispatches WHERE request_key=?")
+      .get(key);
+    return row ? (JSON.parse(String(row["data"])) as Dispatch) : undefined;
+  }
+  dispatches(): Dispatch[] {
+    return this.db
+      .prepare("SELECT data FROM dispatches ORDER BY rowid")
+      .all()
+      .map((row) => JSON.parse(String(row["data"])) as Dispatch);
+  }
+  schedulerEvent(
+    type: "started" | "pause" | "resume" | "integration-failed",
+    data: unknown,
+  ) {
+    this.transaction(() =>
+      this.event("scheduler." + type, null, null, null, data),
+    );
+  }
+  saveDispatch(dispatch: Dispatch) {
+    this.transaction(() => {
+      this.db
+        .prepare(
+          "INSERT INTO dispatches VALUES(?,?,?,?) ON CONFLICT(request_key) DO UPDATE SET state=excluded.state,data=excluded.data",
+        )
+        .run(
+          dispatch.key,
+          dispatch.taskId,
+          dispatch.state,
+          JSON.stringify(dispatch),
+        );
+      this.event("dispatch." + dispatch.state, null, dispatch.taskId, null, {
+        key: dispatch.key,
+        note: dispatch.note,
+      });
+    });
   }
   workspace(taskId: string): Workspace | undefined {
     const row = this.db
@@ -199,6 +244,19 @@ export class Store {
           id: row["id"],
           from: task.status,
           to: this.task(task.id).status,
+        });
+      }
+      for (const dispatch of this.dispatches().filter(
+        (d) => d.state === "active",
+      )) {
+        dispatch.state = "interrupted";
+        dispatch.note =
+          "Recovered; inspect task and use a new request key before retry";
+        this.db
+          .prepare("UPDATE dispatches SET state=?,data=? WHERE request_key=?")
+          .run(dispatch.state, JSON.stringify(dispatch), dispatch.key);
+        this.event("dispatch.interrupted", null, dispatch.taskId, null, {
+          key: dispatch.key,
         });
       }
       return rows.map((row) => row["id"]);
@@ -512,7 +570,7 @@ export class Store {
   status() {
     return {
       projectId: this.projectId,
-      schemaVersion: 2,
+      schemaVersion: 3,
       agents: this.db.prepare("SELECT * FROM agents ORDER BY id").all(),
       tasks: this.db
         .prepare(
