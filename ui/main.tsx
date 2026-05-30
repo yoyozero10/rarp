@@ -15,6 +15,12 @@ const names: Record<string, string> = {
   cancelled: "Đã hủy",
 };
 const short = (s: string) => s.slice(0, 8);
+const stages: Record<string, string> = {
+  working: "Đang thực hiện",
+  verifying: "Đang kiểm thử",
+  waiting_review: "Chờ reviewer",
+  reviewing: "Đang review",
+};
 function Badge({ status }: { status: string }) {
   return <span className={"badge " + status}>{names[status] ?? status}</span>;
 }
@@ -104,6 +110,15 @@ function App() {
     };
   }, [revision]);
   const task = snapshot?.tasks.find((t) => t.id === selected);
+  useEffect(() => {
+    const result = snapshot?.runtime.lastIntegration;
+    if (result?.state === "failed")
+      setError("Tích hợp thất bại: " + result.error);
+    if (result?.state === "integrated") setNotice("Tích hợp commit thành công");
+  }, [
+    snapshot?.runtime.lastIntegration?.state,
+    snapshot?.runtime.lastIntegration?.taskId,
+  ]);
   useEffect(() => {
     setDiff(null);
     setLog([]);
@@ -233,7 +248,10 @@ function App() {
         <div className="aside-bottom">
           <span className="live-dot" />
           {connection}
-          <small>Mỗi dự án · 1 worker đồng thời</small>
+          <small>
+            {snapshot?.runtime.limits.maxWorkers ?? "—"} slot workflow ·{" "}
+            {snapshot?.runtime.limits.maxReviewers ?? "—"} reviewer
+          </small>
           <label>
             Giao diện
             <select value={theme} onChange={(e) => setTheme(e.target.value)}>
@@ -262,6 +280,20 @@ function App() {
             </span>
             <button onClick={() => setRevision((x) => x + 1)}>
               Kết nối lại
+            </button>
+            <button
+              disabled={pending || !snapshot}
+              onClick={() =>
+                void action("Cập nhật scheduler", () =>
+                  api("scheduler", {
+                    action: snapshot?.runtime.paused ? "resume" : "pause",
+                  }),
+                )
+              }
+            >
+              {snapshot?.runtime.paused
+                ? "Tiếp tục hàng chờ"
+                : "Tạm dừng nhận việc"}
             </button>
             <button
               className="primary"
@@ -334,6 +366,86 @@ function App() {
                 <b>{workers.length}</b> worker đã đăng ký
               </span>
             </div>
+            <section
+              className="scheduler-panel"
+              aria-label="Scheduler và hàng chờ"
+            >
+              <div className="section-title">
+                <h2>
+                  Điều phối ·{" "}
+                  {snapshot.runtime.paused ? "Đang tạm dừng" : "Đang nhận việc"}
+                </h2>
+                <span className="muted">
+                  {snapshot.runtime.limits.freeSlots}/
+                  {snapshot.runtime.limits.maxWorkers} slot trống ·{" "}
+                  {snapshot.runtime.limits.activeReviewers}/
+                  {snapshot.runtime.limits.maxReviewers} reviewer
+                </span>
+              </div>
+              {snapshot.runtime.workers.map((w) => (
+                <div className="agent-row" key={w.taskId}>
+                  <div>
+                    <strong>{w.assignee}</strong>
+                    <small>
+                      {stages[w.workflow?.stage ?? "working"] ??
+                        w.workflow?.stage}{" "}
+                      · PID {w.pid ?? "đang chuẩn bị"}
+                    </small>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setSelected(w.taskId);
+                      setActor(
+                        snapshot.tasks.find((t) => t.id === w.taskId)
+                          ?.created_by ?? "",
+                      );
+                    }}
+                  >
+                    {snapshot.tasks.find((t) => t.id === w.taskId)?.title ??
+                      short(w.taskId)}
+                  </button>
+                </div>
+              ))}
+              {!snapshot.runtime.workers.length && (
+                <p className="muted">Chưa có workflow đang chạy.</p>
+              )}
+              {snapshot.runtime.integration && (
+                <p role="status">
+                  Đang kiểm thử/tích hợp:{" "}
+                  {
+                    snapshot.tasks.find(
+                      (t) => t.id === snapshot.runtime.integration?.taskId,
+                    )?.title
+                  }
+                </p>
+              )}
+              {!!snapshot.runtime.queue.length && (
+                <>
+                  <h3>Hàng chờ ({snapshot.runtime.queue.length})</h3>
+                  {snapshot.runtime.queue.map((q) => (
+                    <div className="agent-row" key={q.requestKey}>
+                      <div>
+                        <strong>
+                          {snapshot.tasks.find((t) => t.id === q.taskId)
+                            ?.title ?? short(q.taskId)}
+                        </strong>
+                        <small>{q.reason ?? "Sẵn sàng nhận slot"}</small>
+                      </div>
+                      <button
+                        disabled={pending}
+                        onClick={() =>
+                          void action("Bỏ khỏi hàng chờ", () =>
+                            api("cancel", { taskId: q.taskId }),
+                          )
+                        }
+                      >
+                        Bỏ khỏi hàng chờ
+                      </button>
+                    </div>
+                  ))}
+                </>
+              )}
+            </section>
             {view === "board" && (
               <>
                 <div className="section-title">
@@ -468,7 +580,9 @@ function App() {
                     <span>
                       {snapshot.tasks.find(
                         (t) =>
-                          snapshot.runtime.active?.taskId === t.id &&
+                          snapshot.runtime.workers.some(
+                            (w) => w.taskId === t.id,
+                          ) &&
                           (a.role === "manager"
                             ? t.created_by === a.id && t.status === "reviewing"
                             : t.assigned_to === a.id && t.status === "running"),
@@ -671,8 +785,8 @@ function App() {
                       !!task.workspace.integrated
                     }
                     onClick={() =>
-                      void action("Tích hợp", () =>
-                        api("integrate", { taskId: task.id }),
+                      void action("Xếp hàng tích hợp", () =>
+                        api("integrate", { taskId: task.id, async: true }),
                       )
                     }
                   >
@@ -687,14 +801,18 @@ function App() {
                       !note ||
                       actor !== task.created_by ||
                       ["accepted", "cancelled"].includes(task.status) ||
-                      snapshot?.runtime.active?.taskId === task.id
+                      snapshot?.runtime.workers.some(
+                        (w) => w.taskId === task.id,
+                      )
                     }
                     onClick={() => transition("cancelled")}
                   >
                     Hủy task
                   </button>
                 </div>
-                {snapshot?.runtime.active?.taskId === task.id ? (
+                {snapshot?.runtime.workers.some((w) => w.taskId === task.id) ||
+                snapshot?.runtime.queue.some((q) => q.taskId === task.id) ||
+                snapshot?.runtime.integration?.taskId === task.id ? (
                   <button
                     className="danger"
                     disabled={pending}
@@ -704,7 +822,11 @@ function App() {
                       )
                     }
                   >
-                    Dừng workflow này
+                    {snapshot?.runtime.queue.some((q) => q.taskId === task.id)
+                      ? "Bỏ yêu cầu khỏi hàng chờ"
+                      : snapshot?.runtime.integration?.taskId === task.id
+                        ? "Dừng kiểm thử tích hợp"
+                        : "Dừng workflow này"}
                   </button>
                 ) : (
                   <>
@@ -744,20 +866,28 @@ function App() {
                         className="run-form"
                         onSubmit={(e) => {
                           e.preventDefault();
-                          void action("Khởi chạy workflow", () =>
+                          void action("Gửi workflow", () =>
                             api("workflow", {
                               taskId: task.id,
                               adapter,
-                              isolated: true,
+                              isolated:
+                                task.status === "submitted"
+                                  ? !!task.workspace
+                                  : true,
                               resumeReview: task.status === "submitted",
-                              scope: task.workspace
-                                ? []
-                                : scope
-                                    .split(",")
-                                    .map((s) => s.trim())
-                                    .filter(Boolean),
-                              check: task.workspace ? [] : JSON.parse(check),
+                              scope:
+                                task.workspace || task.status === "submitted"
+                                  ? []
+                                  : scope
+                                      .split(",")
+                                      .map((s) => s.trim())
+                                      .filter(Boolean),
+                              check:
+                                task.workspace || task.status === "submitted"
+                                  ? []
+                                  : JSON.parse(check),
                               requestKey: crypto.randomUUID(),
+                              enqueue: true,
                             }),
                           );
                         }}
@@ -777,7 +907,7 @@ function App() {
                             <option value="antigravity">Antigravity</option>
                           </select>
                         </label>
-                        {!task.workspace && (
+                        {!task.workspace && task.status !== "submitted" && (
                           <>
                             <label>
                               Phạm vi file (phân cách bằng dấu phẩy)
@@ -799,7 +929,15 @@ function App() {
                         )}
                         <button
                           className="primary"
-                          disabled={pending || !!snapshot?.runtime.active}
+                          disabled={
+                            pending ||
+                            snapshot?.runtime.workers.some(
+                              (w) => w.taskId === task.id,
+                            ) ||
+                            snapshot?.runtime.queue.some(
+                              (q) => q.taskId === task.id,
+                            )
+                          }
                         >
                           {pending
                             ? "Đang xử lý…"

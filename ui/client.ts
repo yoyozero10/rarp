@@ -45,6 +45,23 @@ export type Snapshot = {
   tasks: Task[];
   recentEvents: Row[];
   runtime: {
+    workers: {
+      taskId: string;
+      assignee: string;
+      attemptId: string;
+      pid?: number;
+      workflow?: { stage: string; round: number };
+    }[];
+    queue: { taskId: string; requestKey: string; reason: string | null }[];
+    limits: {
+      maxWorkers: number;
+      maxReviewers: number;
+      freeSlots: number;
+      activeReviewers: number;
+    };
+    paused: boolean;
+    integration: null | { taskId: string; pid?: number };
+    lastIntegration: null | { taskId: string; state: string; error?: string };
     state: string;
     active: null | {
       taskId: string;
