@@ -4,7 +4,15 @@ CLI điều phối nhiều AI agent trên máy local: lập kế hoạch, giao v
 
 ## Trạng thái
 
-Phase 6 bổ sung hàng chờ bền vững và nhiều workflow cách ly chạy đồng thời. Mặc định 2 slot workflow, 1 reviewer; cấu hình 1–16 slot và đã kiểm chứng 4 worker bằng barrier. Dashboard hiển thị mọi workflow, slot trống, reviewer và lý do chờ. Giữ các chức năng worktree/recovery, diff/evidence và event replay. Xem [kiểm chứng Phase 6](docs/PHASE6-VALIDATION.md).
+Phase 7 đã triển khai, chưa đóng nghiệm thu do live Antigravity còn bị từ chối quyền công cụ. Phase 7 bổ sung mục tiêu, planner read-only, đề xuất có revision/hash và duyệt rõ ràng trước thực thi. Đã kiểm chứng UI fixture và Codex thật đến tích hợp local; xem [kiểm chứng Phase 7](docs/PHASE7-VALIDATION.md). Phase 6 bổ sung hàng chờ bền vững và nhiều workflow cách ly chạy đồng thời. Mặc định 2 slot workflow, 1 reviewer; cấu hình 1–16 slot và đã kiểm chứng 4 worker bằng barrier. Dashboard hiển thị mọi workflow, slot trống, reviewer và lý do chờ. Giữ các chức năng worktree/recovery, diff/evidence và event replay. Xem [kiểm chứng Phase 6](docs/PHASE6-VALIDATION.md).
+
+## Phase 7: mục tiêu và duyệt kế hoạch
+
+Dashboard mở tab **Mục tiêu & kế hoạch**. Nhập mục tiêu, yêu cầu, tiêu chí nghiệm thu và giới hạn worker; lưu rồi yêu cầu phân tích read-only. Planner không được chạy build/test hoặc worker triển khai trước approval.
+
+Xem đề xuất, scope, dependency, wave, argv kiểm thử và chính sách review. Trả lời câu hỏi chưa rõ hoặc sửa JSON để tạo revision mới. Chọn Codex/Antigravity và profile riêng cho từng worker, giới hạn slot/reviewer, chính sách tích hợp; xác nhận rồi bấm **Duyệt và chạy**. Runtime kiểm tra revision/hash và trạng thái repository; CLI/profile không có sẽ báo lỗi, không fallback. Đóng hoặc reload trang không đồng nghĩa duyệt.
+
+Kế hoạch lưu trong SQLite; draft nhập liệu và binding chưa duyệt giữ ở trình duyệt. Tạm dừng chỉ chặn lượt giao việc mới của kế hoạch; hủy chỉ tác động các task liên quan. Tích hợp `reviewed-local` không push/deploy; `manual` cần thao tác tích hợp riêng trước khi dependency tiếp tục.
 
 ## Phase 6: nhiều worker
 
