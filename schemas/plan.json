@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "understood": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 12000
+    },
+    "assumptions": {
+      "maxItems": 30,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 12000
+      }
+    },
+    "questions": {
+      "maxItems": 30,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 12000
+      }
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 12000
+    },
+    "size": {
+      "type": "string",
+      "enum": [
+        "small",
+        "medium",
+        "large"
+      ]
+    },
+    "confidence": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "workers": {
+      "minItems": 1,
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "workerRef": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,39}$"
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12000
+          }
+        },
+        "required": [
+          "workerRef",
+          "rationale"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "maxWorkers": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16
+    },
+    "steps": {
+      "minItems": 1,
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,39}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "requirements": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12000
+          },
+          "deliverable": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12000
+          },
+          "dependencies": {
+            "maxItems": 64,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,39}$"
+            }
+          },
+          "workerRef": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,39}$"
+          },
+          "scope": {
+            "minItems": 1,
+            "maxItems": 64,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            }
+          },
+          "check": {
+            "minItems": 1,
+            "maxItems": 64,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "description": "Executable followed by individual arguments, for example [\"node\", \"-e\", \"require('node:assert').equal(1,1)\"]. Never JSON strings, prose, command objects, or shell strings."
+          },
+          "acceptance": {
+            "minItems": 1,
+            "maxItems": 30,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 12000
+            }
+          }
+        },
+        "required": [
+          "key",
+          "title",
+          "requirements",
+          "deliverable",
+          "dependencies",
+          "workerRef",
+          "scope",
+          "check",
+          "acceptance"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "maxRounds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 3600000
+        },
+        "totalTimeoutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 3600000
+        }
+      },
+      "required": [
+        "maxRounds",
+        "timeoutMs",
+        "totalTimeoutMs"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "understood",
+    "assumptions",
+    "questions",
+    "rationale",
+    "size",
+    "confidence",
+    "workers",
+    "maxWorkers",
+    "steps",
+    "policy"
+  ],
+  "additionalProperties": false
+}

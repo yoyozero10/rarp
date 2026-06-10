@@ -9,6 +9,11 @@ export function codexReviewCommand(file = "codex"): CommandSpec {
   );
   return command;
 }
+export function codexPlannerCommand(file = "codex"): CommandSpec {
+  const command = codexCommand(file, "read-only");
+  command.args.splice(-1, 0, "--output-schema", fileURLToPath(new URL("../../schemas/plan.json", import.meta.url)));
+  return command;
+}
 export interface CommandSpec {
   file: string;
   args: string[];
@@ -72,8 +77,13 @@ export class CodexStream {
       throw new Error("Invalid Codex event");
     const data = event as Record<string, unknown>;
     if (data.type === "turn.completed") this.completed = true;
-    if (data.type === "turn.failed" || data.type === "error")
+    if (data.type === "turn.failed" || data.type === "error") {
       this.failed = true;
+      const error = data.error;
+      const message = error && typeof error === 'object'
+        ? (error as Record<string, unknown>).message : data.message;
+      if (typeof message === 'string' && message.trim()) this.failureReason = message.slice(-19000);
+    }
     if (
       data.type === "item.completed" &&
       data.item &&

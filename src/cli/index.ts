@@ -65,6 +65,14 @@ program
   .action((id: string, options: { role: string }) =>
     run((s) => s.register(id, options.role)),
   );
+const goal = program.command('goal').description('Goals and read-only planning');
+goal.command('create').requiredOption('--file <path>', 'Goal JSON file').action(async (options:{file:string})=>console.log(JSON.stringify(await runtimeRequest(program.opts()['project'] as string,'goals',JSON.parse(readFileSync(options.file,'utf8'))),null,2)));
+goal.command('list').action(async()=>console.log(JSON.stringify(await runtimeRequest(program.opts()['project'] as string,'goals'),null,2)));
+goal.command('show <id>').action(async(id:string)=>console.log(JSON.stringify(await runtimeRequest(program.opts()['project'] as string,'goals/'+id),null,2)));
+const plan = program.command('plan').description('Inspect, revise and explicitly approve plans');
+plan.command('list').action(async()=>console.log(JSON.stringify(await runtimeRequest(program.opts()['project'] as string,'plans'),null,2)));
+plan.command('show <id>').action(async(id:string)=>console.log(JSON.stringify(await runtimeRequest(program.opts()['project'] as string,'plans/'+id),null,2)));
+for(const action of ['update','analyze','approve','reject','cancel','pause','resume']) plan.command(action+' <id>').option('--file <path>','Request JSON file').action(async(id:string,options:{file?:string})=>console.log(JSON.stringify(await runtimeRequest(program.opts()['project'] as string,'plans/'+id+'/'+action,options.file?JSON.parse(readFileSync(options.file,'utf8')):{}),null,2)));
 const task = program.command("task").description("Manage tasks");
 task
   .command("create")
