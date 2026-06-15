@@ -1,4 +1,7 @@
 import { randomBytes } from "node:crypto";
+import { profileCommand, repositorySnapshot, available } from "./planning.js";
+import { hash } from "../core/plan.js";
+import type { PlanningAdapters } from "./planning.js";
 import { z } from "zod";
 import { dispatchSchema } from "../core/dispatch.js";
 import type { Dispatch, DispatchInput } from "../core/dispatch.js";
@@ -40,7 +43,7 @@ export function createScheduler(
   store: Store,
   root: string,
   command: CommandSpec,
-  adapters: { antigravity?: CommandSpec; manager?: CommandSpec },
+  adapters: PlanningAdapters,
   options: SchedulerOptions = {},
 ) {
   const limits = limitsSchema.parse(options),
@@ -55,6 +58,8 @@ export function createScheduler(
     | { taskId: string; check?: ReturnType<typeof runWorker> }
     | undefined;
   let integrationTail: Promise<unknown> = Promise.resolve();
+  const integratingPlans = new Set<string>();
+  const executionReviews = new Map<string, ReturnType<typeof reviewPool>>();
   let lastIntegration: {
     taskId: string;
     state: string;
@@ -79,6 +84,20 @@ export function createScheduler(
       task = store.show(dispatch.taskId);
     if (stopping || error) return "Runtime stopping";
     if (paused) return "Scheduler paused";
+    const plan = store.taskPlan(task.id);
+    if (plan) {
+      if(plan.status !== 'executing') return 'Execution '+plan.status;
+      if(!plan.approval || input.executionId!==plan.id) return 'Missing plan approval';
+      const step=plan.proposal?.steps.find(s=>store.planLinks(plan.id).find(l=>l.taskId===task.id)?.stepKey===s.key);
+      const binding=plan.approval.workers.find(w=>w.workerRef===step?.workerRef);
+      if(!binding || input.adapter!==binding.adapter || input.profile!==binding.profile) return 'Plan binding changed';
+      const selected=profileCommand(adapters,command,binding.adapter,binding.profile);
+      if(!available(selected.file) || plan.bindings?.[binding.workerRef]!==hash(selected)) { store.planState(plan.id,'paused','Profile changed or unavailable; approval required'); return 'Profile changed'; }
+      if(integration) return 'Integration in progress';
+      const snapshot=repositorySnapshot(root), expected=plan.executionSnapshot??plan;
+      if(snapshot.baseHead!==expected.baseHead || snapshot.fingerprint!==expected.fingerprint) { store.planState(plan.id,'paused','Repository stale before dispatch; analyze again'); return 'Repository stale'; }
+      if([...active.values()].filter(a=>a.dispatch.input.executionId===plan.id).length>=plan.approval.maxWorkers) return 'Execution worker capacity busy';
+    }
     if (active.size >= limits.maxWorkers) return "Worker capacity busy";
     if (active.has(task.id)) return "Task already active";
     if ([...active.values()].some((a) => a.assignee === task.assigned_to))
@@ -177,8 +196,9 @@ export function createScheduler(
           );
       const attemptId = String(running.attempts.at(-1)!["id"]),
         id = runId;
-      const selected =
-        input.adapter === "antigravity"
+      const selected = input.executionId
+        ? profileCommand(adapters, command, input.adapter, input.profile)
+        : input.adapter === "antigravity"
           ? (adapters.antigravity ?? antigravityCommand())
           : command;
       const worker =
@@ -193,7 +213,13 @@ export function createScheduler(
                 ...input,
                 ...(workspace ? { workspace } : {}),
                 onSpawn: (pid) => store.hostRun(id, pid),
-                acquireReview: (signal) => reviews.acquire(signal),
+                acquireReview: async (signal) => {
+                  if(!input.executionId) return reviews.acquire(signal);
+                  let pool=executionReviews.get(input.executionId);
+                  if(!pool) { pool=reviewPool(store.plan(input.executionId).approval!.maxReviewers); executionReviews.set(input.executionId,pool); }
+                  const local=await pool.acquire(signal);
+                  try { const global=await reviews.acquire(signal); return ()=>{global();local();}; } catch(e) {local();throw e;}
+                },
               },
               attemptId,
             )
@@ -253,6 +279,16 @@ export function createScheduler(
   }
   function tick() {
     if (stopping || paused || error) return;
+    for (const plan of store.plans().filter(p=>p.status==='executing')) {
+      const links=store.planLinks(plan.id), tasks=links.map(l=>store.show(l.taskId));
+      if(tasks.some(t=>['failed','blocked','changes_requested','cancelled'].includes(t.status))) { store.planState(plan.id,'paused','Task needs decision'); continue; }
+      const accepted=tasks.find(t=>t.status==='accepted' && !store.workspace(t.id)?.integrated);
+      if(accepted && plan.approval?.integration==='reviewed-local' && !integration && !integratingPlans.has(plan.id)) {
+        integratingPlans.add(plan.id);
+        void api.integrate(accepted.id).catch(cause=>{ if(store.plan(plan.id).status==='executing') store.planState(plan.id,'paused',String(cause)); }).finally(()=>integratingPlans.delete(plan.id));
+      }
+      if(tasks.length && tasks.every(t=>t.status==='accepted' && !!store.workspace(t.id)?.integrated)) store.planState(plan.id,'completed');
+    }
     for (const dispatch of pending()) {
       try {
         validate(dispatch);
@@ -260,6 +296,8 @@ export function createScheduler(
       } catch (cause) {
         if (dispatch.state === "waiting")
           finish(dispatch, "failed", String(cause));
+        const plan = store.taskPlan(dispatch.taskId);
+        if (plan?.status === 'executing') store.planState(plan.id, 'paused', String(cause));
       }
     }
   }
@@ -303,7 +341,7 @@ export function createScheduler(
     }
     throw new Error("Active task changed; refresh before cancelling");
   }
-  return {
+  const api = {
     get error() {
       return error;
     },
@@ -352,6 +390,7 @@ export function createScheduler(
     request(route: "run" | "workflow", body: unknown) {
       const input = dispatchSchema.parse(body),
         key = input.requestKey ?? randomBytes(16).toString("hex");
+      if(store.taskPlan(input.taskId) || input.executionId) throw new Error('Plan tasks dispatch only through approved materialization');
       const fingerprint = JSON.stringify({
           route: "/" + route,
           ...input,
@@ -408,6 +447,8 @@ export function createScheduler(
           [...active.values()].some((a) => !a.dispatch.input.isolated)
         )
           throw new Error("Main checkout busy or runtime stopping");
+        const plan=store.taskPlan(taskId);
+        if(plan && plan.status!=='executing') throw new Error('Execution not running');
         const task = store.show(taskId);
         if (task.status !== "accepted")
           throw new Error("Task must be accepted before integration");
@@ -452,6 +493,8 @@ export function createScheduler(
             },
           );
           store.saveWorkspace(workspace);
+          const plan=store.taskPlan(taskId);
+          if(plan) store.planSnapshot(plan.id,repositorySnapshot(root));
           lastIntegration = { taskId, state: "integrated" };
           store.finishRun(runId, {
             state: "integrated",
@@ -494,4 +537,5 @@ export function createScheduler(
       if (error) throw error;
     },
   };
+  return api;
 }
