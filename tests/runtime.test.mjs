@@ -41,6 +41,17 @@ test("incremental JSONL parses split lines and requires valid events", () => {
   assert.equal(events.length, 1);
   assert.throws(() => parser.feed("null\n"), /Invalid/);
 });
+
+test('Codex errors preserve actionable failure details without accepting malformed messages', () => {
+  const parser = new CodexStream(() => {});
+  parser.feed(JSON.stringify({type:'error',message:'Usage limit reached'})+'\n');
+  assert.equal(parser.failed,true);
+  assert.equal(parser.failureReason,'Usage limit reached');
+  parser.feed(JSON.stringify({type:'turn.failed',error:{message:'Authentication expired'}})+'\n');
+  assert.equal(parser.failureReason,'Authentication expired');
+  parser.feed(JSON.stringify({type:'turn.failed',error:{message:{unexpected:true}}})+'\n');
+  assert.equal(parser.failureReason,'Authentication expired');
+});
 test("runtime excludes duplicate owner, authenticates, submits and attaches logs", async (t) => {
   const { root, store, task, runtime } = await fixture(t, "success");
   await assert.rejects(startRuntime(root), /lock exists/);
