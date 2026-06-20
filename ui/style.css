@@ -741,3 +741,13 @@ fieldset {
     grid-template-columns: 85px minmax(0, 1fr);
   }
 }
+.planning { padding: 20px; margin-bottom: 24px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.planning label { display: grid; gap: 6px; margin: 12px 0; }
+.planning textarea { min-height: 90px; width: 100%; }
+.planning .plan-json { min-height: 360px; font-family: monospace; }
+.planning fieldset { margin: 20px 0; border: 1px solid var(--border); }
+.plan-step { padding: 12px; margin: 12px 0; border: 1px solid var(--border); border-radius: 6px; }
+.plan-binding { border-bottom: 1px solid var(--border); padding: 12px 0; }
+.plan-hash, .planning code { overflow-wrap: anywhere; }
+.planning pre { max-height: 300px; overflow: auto; white-space: pre-wrap; }
+.planning input[type=checkbox] { width: auto; justify-self: start; }
