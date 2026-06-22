@@ -4,7 +4,7 @@ CLI điều phối nhiều AI agent trên máy local: lập kế hoạch, giao v
 
 ## Trạng thái
 
-Phase 7 đã triển khai, chưa đóng nghiệm thu do live Antigravity còn bị từ chối quyền công cụ. Phase 7 bổ sung mục tiêu, planner read-only, đề xuất có revision/hash và duyệt rõ ràng trước thực thi. Đã kiểm chứng UI fixture và Codex thật đến tích hợp local; xem [kiểm chứng Phase 7](docs/PHASE7-VALIDATION.md). Phase 6 bổ sung hàng chờ bền vững và nhiều workflow cách ly chạy đồng thời. Mặc định 2 slot workflow, 1 reviewer; cấu hình 1–16 slot và đã kiểm chứng 4 worker bằng barrier. Dashboard hiển thị mọi workflow, slot trống, reviewer và lý do chờ. Giữ các chức năng worktree/recovery, diff/evidence và event replay. Xem [kiểm chứng Phase 6](docs/PHASE6-VALIDATION.md).
+Phase 7 đã đóng nghiệm thu 2026-10-25: 59/59 tests, CI Windows/Linux và live Codex đơn/hỗn hợp đạt. Antigravity trong bài test dùng ngoại lệ quyền được người dùng duyệt riêng; cấu hình runtime mặc định giữ nguyên. Phase 7 bổ sung mục tiêu, planner read-only, đề xuất có revision/hash và duyệt rõ ràng trước thực thi. Đã kiểm chứng UI fixture và Codex thật đến tích hợp local; xem [kiểm chứng Phase 7](docs/PHASE7-VALIDATION.md). Phase 6 bổ sung hàng chờ bền vững và nhiều workflow cách ly chạy đồng thời. Mặc định 2 slot workflow, 1 reviewer; cấu hình 1–16 slot và đã kiểm chứng 4 worker bằng barrier. Dashboard hiển thị mọi workflow, slot trống, reviewer và lý do chờ. Giữ các chức năng worktree/recovery, diff/evidence và event replay. Xem [kiểm chứng Phase 6](docs/PHASE6-VALIDATION.md).
 
 ## Phase 7: mục tiêu và duyệt kế hoạch
 

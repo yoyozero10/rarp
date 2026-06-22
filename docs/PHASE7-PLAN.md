@@ -1,6 +1,6 @@
 # Phase 7 — Nhận mục tiêu, lập kế hoạch và duyệt trước khi chạy
 
-Trạng thái: đã triển khai, đang nghiệm thu; chưa đóng Phase 7. Typecheck/build, bộ test và UI fixture đạt; Codex thật có luồng hoàn tất. Live hỗn hợp bị chặn vì Antigravity từ chối quyền công cụ. Xem [báo cáo kiểm chứng](PHASE7-VALIDATION.md).
+Trạng thái: đã đóng nghiệm thu ngày 2026-10-25. UI/CLI/API, SQLite v4, planner read-only, approval revision/hash và executor đã đạt; 59/59 tests, CI Windows/Linux, live Codex đơn và mixed Codex/Antigravity hoàn tất đến integration. Antigravity dùng ngoại lệ quyền test được người dùng duyệt riêng, không đổi mặc định runtime. Xem [báo cáo kiểm chứng](PHASE7-VALIDATION.md).
 
 ## Luồng người dùng
 
