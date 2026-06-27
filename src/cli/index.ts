@@ -158,12 +158,14 @@ runtime
     "codex",
   )
   .option("--agy <executable>", "Antigravity executable", "agy")
+  .option("--manager-profile <name>", "Codex CLI profile for planner and reviewer")
   .option("--max-workers <n>", "Concurrent workflow slots (1–16)", "2")
   .option("--max-reviewers <n>", "Concurrent review invocations (1–16)", "1")
   .action(
     async (options: {
       codex: string;
       agy: string;
+      managerProfile?: string;
       maxWorkers: string;
       maxReviewers: string;
     }) => {
@@ -176,6 +178,7 @@ runtime
           options.agy,
           options.maxWorkers,
           options.maxReviewers,
+          ...(options.managerProfile !== undefined ? [options.managerProfile] : []),
         ],
         {
           detached: true,

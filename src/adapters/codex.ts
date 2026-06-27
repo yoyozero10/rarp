@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
-export function codexReviewCommand(file = "codex"): CommandSpec {
-  const command = codexCommand(file, "read-only");
+export function codexReviewCommand(file = "codex", profile?: string): CommandSpec {
+  const command = codexCommand(file, "read-only", profile);
   command.args.splice(
     -1,
     0,
@@ -9,8 +9,8 @@ export function codexReviewCommand(file = "codex"): CommandSpec {
   );
   return command;
 }
-export function codexPlannerCommand(file = "codex"): CommandSpec {
-  const command = codexCommand(file, "read-only");
+export function codexPlannerCommand(file = "codex", profile?: string): CommandSpec {
+  const command = codexCommand(file, "read-only", profile);
   command.args.splice(-1, 0, "--output-schema", fileURLToPath(new URL("../../schemas/plan.json", import.meta.url)));
   return command;
 }
@@ -23,11 +23,15 @@ export interface CommandSpec {
 export function codexCommand(
   file = "codex",
   sandbox = "workspace-write",
+  profile?: string,
 ): CommandSpec {
+  if (profile !== undefined && (!profile.trim() || /[\0\r\n]/.test(profile)))
+    throw new Error("Codex profile must be a non-empty name without control characters");
   return {
     file,
     args: [
       "--no-daemon",
+      ...(profile !== undefined ? ["--profile", profile] : []),
       "-a",
       "never",
       "exec",
