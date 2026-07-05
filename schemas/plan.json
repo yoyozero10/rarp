@@ -176,12 +176,18 @@
           "type": "integer",
           "minimum": 100,
           "maximum": 3600000
+        },
+        "maxRetries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
         }
       },
       "required": [
         "maxRounds",
         "timeoutMs",
-        "totalTimeoutMs"
+        "totalTimeoutMs",
+        "maxRetries"
       ],
       "additionalProperties": false
     }

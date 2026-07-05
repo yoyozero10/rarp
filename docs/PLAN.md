@@ -93,6 +93,8 @@ Trạng thái: đã đóng nghiệm thu 2026-10-25; 59/59 tests, CI Windows/Linu
 
 ## Việc tiếp theo
 
+Phase 8 đã triển khai recovery và vòng sửa có ngân sách, live manager 9router + hai worker agy đạt với ngoại lệ quyền được duyệt riêng. UI đã nghiệm thu trên runtime fixture ngày 2026-10-29. Còn CI Linux cho Phase 8; xem [kiểm chứng Phase 8](PHASE8-VALIDATION.md).
+
 1. M7 đã đóng. Khi dùng Antigravity thường xuyên, cấu hình quyền công cụ phù hợp; runtime giữ nguyên approval gate và không tự bỏ duyệt. Xem [kiểm chứng Phase 7](PHASE7-VALIDATION.md).
 2. Benchmark tải/log và tài khoản thực tế trước khi nâng capacity trên 4.
 3. Trước tác vụ dài không giám sát: containment tiến trình Windows mạnh hơn và mở rộng kiểm chứng crash recovery.

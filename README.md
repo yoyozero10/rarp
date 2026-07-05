@@ -4,6 +4,21 @@ CLI điều phối nhiều AI agent trên máy local: lập kế hoạch, giao v
 
 ## Trạng thái
 
+Phase 8 đã triển khai khôi phục plan dừng, giữ task không đổi qua revision, ngân sách sửa/retry bền vững và kiểm tra toàn bộ checkout trước `completed`. Live manager `9router` với hai worker agy đã đạt trong repo TEMP, dùng ngoại lệ quyền được duyệt riêng. UI đã nghiệm thu trên runtime fixture (tích hợp, resume, hoàn tất). Xem [kiểm chứng Phase 8](docs/PHASE8-VALIDATION.md).
+
+## Phase 8: khôi phục và tự sửa có giới hạn
+
+- Task accepted không cần tích hợp trước khi sửa revision; nội dung và dependency đã được chấp nhận phải giữ nguyên. Task không đổi giữ ID, lịch sử và workspace.
+- Có thể tích hợp task accepted khi plan `paused`; runtime kiểm tra fingerprint repo, commit, scope và lệnh check đã duyệt. Thao tác lặp không tạo commit/task trùng.
+- `resume` thử lại task chưa đạt trong ngân sách còn lại, dùng feedback gần nhất. Hết ngân sách: lưu revision mới, duyệt mức trần mới. Không tự chạy lại task accepted.
+- Approval cho phép chọn tổng lượt làm mỗi task (gồm lượt đầu), retry lỗi tạm thời, tổng thời gian plan và quyền tích hợp. Các lượt sửa trong mức đã duyệt không hỏi lại. Thay phạm vi/CLI/profile/ngân sách phải duyệt lại.
+- Review/check lỗi có thể sửa được sẽ trở lại worker; retry kết nối có backoff. Thiếu quyền, CLI hoặc đăng nhập, conflict, feedback lặp không tiến triển sẽ dừng và giữ workspace.
+- `accepted` là kết quả review của task. `completed` yêu cầu mọi task được tích hợp và mọi lệnh check của plan chạy lại thành công trên checkout cuối. Check lỗi lúc tích hợp hoặc kiểm tra cuối có thể dùng lượt sửa còn lại; workspace cũ được giữ để đối chiếu.
+
+Các mô tả workflow độc lập ở phần sau vẫn áp dụng cho task ngoài plan; ngân sách Phase 8 thuộc execution đã duyệt.
+
+## Các mốc trước
+
 Phase 7 đã đóng nghiệm thu 2026-10-25: 59/59 tests, CI Windows/Linux và live Codex đơn/hỗn hợp đạt. Antigravity trong bài test dùng ngoại lệ quyền được người dùng duyệt riêng; cấu hình runtime mặc định giữ nguyên. Phase 7 bổ sung mục tiêu, planner read-only, đề xuất có revision/hash và duyệt rõ ràng trước thực thi. Đã kiểm chứng UI fixture và Codex thật đến tích hợp local; xem [kiểm chứng Phase 7](docs/PHASE7-VALIDATION.md). Phase 6 bổ sung hàng chờ bền vững và nhiều workflow cách ly chạy đồng thời. Mặc định 2 slot workflow, 1 reviewer; cấu hình 1–16 slot và đã kiểm chứng 4 worker bằng barrier. Dashboard hiển thị mọi workflow, slot trống, reviewer và lý do chờ. Giữ các chức năng worktree/recovery, diff/evidence và event replay. Xem [kiểm chứng Phase 6](docs/PHASE6-VALIDATION.md).
 
 ## Phase 7: mục tiêu và duyệt kế hoạch
