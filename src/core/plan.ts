@@ -3,6 +3,16 @@ import { createHash } from "node:crypto";
 
 const text = z.string().trim().min(1).max(12000);
 const key = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,39}$/);
+export const budgetSchema = z.object({
+  maxRounds: z.number().int().min(1).max(10),
+  maxRetries: z.number().int().min(0).max(10).default(2),
+  timeoutMs: z.number().int().min(100).max(3600000),
+  totalTimeoutMs: z.number().int().min(100).max(3600000),
+}).strict();
+export type Budget = z.infer<typeof budgetSchema>;
+export type StopReason = 'human' | 'budget' | 'worker' | 'review' | 'integration' | 'verification' | 'configuration' | 'repository' | 'no-progress';
+export interface TaskUsage { rounds: number; retries: number; feedback?: string; stopReason?: StopReason; retryAt?: number; signature?: string; }
+export interface Execution { startedAt?: number; elapsedMs?: number; tasks: Record<string, TaskUsage>; verification?: { head: string; passed: boolean; evidence: string[] }; }
 export const safeScope = z.string().min(1).max(240).refine((s) =>
   !s.includes("\\") && !s.includes(":") && !s.startsWith("/") &&
   s.split("/").every((p) => p !== "." && p !== ".." && p.length > 0 && !/[. ]$/.test(p) && !p.startsWith('-') && !/[\x00-\x1f*?]/.test(p) && ![".git", ".rarp"].includes(p.toLowerCase())), "Unsafe repository scope");
@@ -23,7 +33,7 @@ export const proposalSchema = z.object({
     scope: z.array(safeScope).min(1).max(64), check: checkSchema.describe('Executable followed by individual arguments, for example ["node", "-e", "require(\'node:assert\').equal(1,1)"]. Never JSON strings, prose, command objects, or shell strings.'),
     acceptance: z.array(text).min(1).max(30),
   }).strict()).min(1).max(64),
-  policy: z.object({ maxRounds: z.number().int().min(1).max(10), timeoutMs: z.number().int().min(100).max(3600000), totalTimeoutMs: z.number().int().min(100).max(3600000) }).strict(),
+  policy: budgetSchema,
 }).strict();
 export type Proposal = z.infer<typeof proposalSchema>;
 export const goalSchema = z.object({ title: text.max(500), requirements: text, acceptance: z.array(text).min(1).max(30), maxWorkers: z.number().int().min(1).max(16).default(4) }).strict();
@@ -32,10 +42,13 @@ export const approvalSchema = z.object({
   actor: z.literal("human"), maxWorkers: z.number().int().min(1).max(16), maxReviewers: z.number().int().min(1).max(16),
   workers: z.array(z.object({ workerRef: key, adapter: z.enum(["codex", "antigravity"]), profile: key }).strict()).min(1).max(16),
   integration: z.enum(["reviewed-local", "manual"]),
+  budget: budgetSchema.optional(),
 }).strict();
 export type Approval = z.infer<typeof approvalSchema>;
 export interface Goal { id: string; title: string; requirements: string; acceptance: string[]; maxWorkers: number; status: string; createdAt: string; }
-export interface Plan { id: string; goalId: string; revision: number; contentHash: string; baseHead: string; fingerprint: string; status: string; proposal: Proposal | null; approval?: Approval; bindings?: Record<string,string>; executionSnapshot?: {baseHead:string;fingerprint:string}; note?: string; createdAt: string; }
+export interface Plan { id: string; goalId: string; revision: number; contentHash: string; baseHead: string; fingerprint: string; status: string; proposal: Proposal | null; approval?: Approval; bindings?: Record<string,string>; executionSnapshot?: {baseHead:string;fingerprint:string}; execution?: Execution; stopReason?: StopReason; note?: string; createdAt: string; }
+export const planBudget = (p: Plan): Budget => budgetSchema.parse(p.approval?.budget ?? p.proposal?.policy);
+export const remainingTime = (p: Plan) => Math.max(0,planBudget(p).totalTimeoutMs-(p.execution?.elapsedMs??0)-(p.execution?.startedAt?Date.now()-p.execution.startedAt:0));
 export function overlap(a: string[], b: string[]) {
   return a.some((x) => b.some((y) => { x=x.toLowerCase(); y=y.toLowerCase(); return x===y || x.startsWith(y+"/") || y.startsWith(x+"/"); }));
 }

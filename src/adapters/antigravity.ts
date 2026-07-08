@@ -70,7 +70,12 @@ export class AntigravityStream {
           }) + "\n",
         );
         this.parser.feed('{"type":"turn.completed"}\n');
-      } else this.parser.feed('{"type":"turn.failed"}\n');
+      } else {
+        const error=result?.error;
+        const message=typeof error==='string'?error:error && typeof error==='object'?(error as Record<string,unknown>)['message']:result?.message??result?.response;
+        if(typeof message==='string')this.failureReason=message.slice(-19000);
+        this.parser.feed('{"type":"turn.failed"}\n');
+      }
     }
   }
 }
