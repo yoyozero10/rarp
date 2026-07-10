@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { profileCommand, repositorySnapshot, available } from "./planning.js";
-import { hash } from "../core/plan.js";
+import { hash, planBudget, remainingTime } from "../core/plan.js";
 import type { PlanningAdapters } from "./planning.js";
 import { z } from "zod";
 import { dispatchSchema } from "../core/dispatch.js";
@@ -11,12 +11,15 @@ import { codexReviewCommand } from "../adapters/codex.js";
 import { antigravityCommand } from "../adapters/antigravity.js";
 import { runWorker } from "./process.js";
 import { runWorkflow } from "./workflow.js";
+import { classifyFailure } from './workflow.js';
 import {
   prepareWorkspace,
   integrateWorkspaceAsync,
   validateScope,
+  git,
 } from "./workspace.js";
 import { reviewPool } from "./review-pool.js";
+import type { Workspace } from './workspace.js';
 
 type Active = {
   dispatch: Dispatch;
@@ -53,7 +56,7 @@ export function createScheduler(
   let last: unknown = null,
     error: unknown,
     stopping = false,
-    paused = store.dispatches().some((d) => d.state === "waiting");
+    paused = store.events().filter(e=>e['type']==='scheduler.pause' || e['type']==='scheduler.resume').at(-1)?.['type']==='scheduler.pause' || store.dispatches().some(d=>d.state==='waiting' && !d.input.executionId);
   let integration:
     | { taskId: string; check?: ReturnType<typeof runWorker> }
     | undefined;
@@ -88,14 +91,17 @@ export function createScheduler(
     if (plan) {
       if(plan.status !== 'executing') return 'Execution '+plan.status;
       if(!plan.approval || input.executionId!==plan.id) return 'Missing plan approval';
+      if(plan.bindings?.['__manager'] && plan.bindings['__manager']!==hash(adapters.manager??codexReviewCommand(command.file))) {store.planState(plan.id,'paused','Manager profile changed; approval required','configuration');return 'Manager profile changed';}
       const step=plan.proposal?.steps.find(s=>store.planLinks(plan.id).find(l=>l.taskId===task.id)?.stepKey===s.key);
       const binding=plan.approval.workers.find(w=>w.workerRef===step?.workerRef);
       if(!binding || input.adapter!==binding.adapter || input.profile!==binding.profile) return 'Plan binding changed';
       const selected=profileCommand(adapters,command,binding.adapter,binding.profile);
-      if(!available(selected.file) || plan.bindings?.[binding.workerRef]!==hash(selected)) { store.planState(plan.id,'paused','Profile changed or unavailable; approval required'); return 'Profile changed'; }
+      if(!available(selected.file) || plan.bindings?.[binding.workerRef]!==hash(selected)) { store.planState(plan.id,'paused','Profile changed or unavailable; approval required','configuration'); return 'Profile changed'; }
       if(integration) return 'Integration in progress';
       const snapshot=repositorySnapshot(root), expected=plan.executionSnapshot??plan;
-      if(snapshot.baseHead!==expected.baseHead || snapshot.fingerprint!==expected.fingerprint) { store.planState(plan.id,'paused','Repository stale before dispatch; analyze again'); return 'Repository stale'; }
+      if(snapshot.baseHead!==expected.baseHead || snapshot.fingerprint!==expected.fingerprint) { store.planState(plan.id,'paused','Repository stale before dispatch; analyze again','repository'); return 'Repository stale'; }
+      const budget=planBudget(plan),usage=store.taskUsage(task.id);
+      if((!input.resumeReview && usage.rounds>=budget.maxRounds) || remainingTime(plan)<=0) {store.planState(plan.id,'paused','Budget exhausted; approve a larger budget in a new revision','budget');return 'Budget exhausted';}
       if([...active.values()].filter(a=>a.dispatch.input.executionId===plan.id).length>=plan.approval.maxWorkers) return 'Execution worker capacity busy';
     }
     if (active.size >= limits.maxWorkers) return "Worker capacity busy";
@@ -173,6 +179,7 @@ export function createScheduler(
       validate(dispatch);
       const input = dispatch.input,
         task = store.show(input.taskId);
+      if(input.executionId)store.startExecution(input.executionId);
       finish(dispatch, "active", "Claimed by scheduler");
       let workspace = store.workspace(task.id);
       if (input.isolated && !workspace) {
@@ -281,13 +288,18 @@ export function createScheduler(
     if (stopping || paused || error) return;
     for (const plan of store.plans().filter(p=>p.status==='executing')) {
       const links=store.planLinks(plan.id), tasks=links.map(l=>store.show(l.taskId));
-      if(tasks.some(t=>['failed','blocked','changes_requested','cancelled'].includes(t.status))) { store.planState(plan.id,'paused','Task needs decision'); continue; }
+      const failed=tasks.find(t=>['failed','blocked','changes_requested','cancelled'].includes(t.status) && !active.has(t.id));
+      if(failed) {const usage=store.taskUsage(failed.id);store.planState(plan.id,'paused',usage.feedback??String(failed.reviews.at(-1)?.['feedback']??'Task needs decision'),usage.stopReason??(failed.status==='changes_requested'?'review':'worker'));continue;}
       const accepted=tasks.find(t=>t.status==='accepted' && !store.workspace(t.id)?.integrated);
       if(accepted && plan.approval?.integration==='reviewed-local' && !integration && !integratingPlans.has(plan.id)) {
         integratingPlans.add(plan.id);
-        void api.integrate(accepted.id).catch(cause=>{ if(store.plan(plan.id).status==='executing') store.planState(plan.id,'paused',String(cause)); }).finally(()=>integratingPlans.delete(plan.id));
+        void api.integrate(accepted.id).catch(cause=>{ if(store.plan(plan.id).status==='executing') store.planState(plan.id,'paused',String(cause),'integration'); }).finally(()=>integratingPlans.delete(plan.id));
       }
-      if(tasks.length && tasks.every(t=>t.status==='accepted' && !!store.workspace(t.id)?.integrated)) store.planState(plan.id,'completed');
+      if(tasks.length && tasks.every(t=>t.status==='accepted' && !!store.workspace(t.id)?.integrated) && !integration && !integratingPlans.has(plan.id) && !active.size) {
+        integratingPlans.add(plan.id);
+        const result=integrationTail.then(()=>verifyPlan(plan.id));
+        integrationTail=result.catch(cause=>{if(store.plan(plan.id).status==='executing')store.planState(plan.id,'paused',String(cause),'verification');}).finally(()=>integratingPlans.delete(plan.id));
+      }
     }
     for (const dispatch of pending()) {
       try {
@@ -297,9 +309,39 @@ export function createScheduler(
         if (dispatch.state === "waiting")
           finish(dispatch, "failed", String(cause));
         const plan = store.taskPlan(dispatch.taskId);
-        if (plan?.status === 'executing') store.planState(plan.id, 'paused', String(cause));
+        if (plan?.status === 'executing') store.planState(plan.id, 'paused', String(cause),'configuration');
       }
     }
+  }
+  async function verifyPlan(id:string) {
+    const p=store.plan(id);if(stopping || p.status!=='executing')return;
+    const before=repositorySnapshot(root),expected=p.executionSnapshot??p;
+    if(before.baseHead!==expected.baseHead || before.fingerprint!==expected.fingerprint)throw new Error('Repository stale before final verification');
+    const deadline=store.startExecution(id),evidence:string[]=[];
+    for(const link of store.planLinks(id)) {
+      if(stopping || store.plan(id).status!=='executing')return;
+      if(Date.now()>=deadline){store.planState(id,'paused','Execution time budget exhausted','budget');return;}
+      const ws=store.workspace(link.taskId)!,task=store.show(link.taskId);
+      const runId=store.reserveRun('final-'+randomBytes(16).toString('hex'),'final:'+before.baseHead,task.id,owner);
+      integration={taskId:task.id};
+      try {
+        const check=runWorker({file:ws.check[0]!,args:ws.check.slice(1),protocol:'check'},root,'',Math.max(1,Math.min(planBudget(p).timeoutMs,deadline-Date.now())),event=>store.recordReviewEvent(task.id,String(task.attempts.at(-1)!['id']),task.created_by,event),pid=>store.hostRun(runId,pid));
+        integration.check=check;const result=await check.done;store.finishRun(runId,result);
+        const after=repositorySnapshot(root);if(after.baseHead!==before.baseHead || after.fingerprint!==before.fingerprint || git(root,'status','--porcelain'))throw new Error('Repository changed during final verification');
+        evidence.push(link.stepKey+': '+result.note);
+        if(!result.success) {
+          store.planVerification(id,{head:before.baseHead,passed:false,evidence});
+          if(stopping || store.plan(id).status!=='executing')return;
+          const reason=result.reason==='cancelled'?'human':classifyFailure(result.note,'verification'),usage=store.taskUsage(task.id);
+          if(reason==='human'){store.planState(id,'paused','Final verification cancelled','human');return;}
+          if(reason==='configuration' || usage.rounds>=planBudget(p).maxRounds || Date.now()>=deadline) {store.planState(id,'paused',result.note,reason==='configuration'?reason:'budget');return;}
+          const fresh=prepareWorkspace(root,task.id,ws.scope,ws.check,'-repair-'+randomBytes(6).toString('hex'));
+          store.repairAccepted(task.id,fresh,'Final verification failed: '+result.note);return;
+        }
+      }catch(cause){if(String(cause).includes('cleanup failed')){error=cause;stopping=true;}else store.finishRun(runId,{error:String(cause)});throw cause;}
+      finally{integration=undefined;}
+    }
+    if(!stopping && store.plan(id).status==='executing'){store.planVerification(id,{head:before.baseHead,passed:true,evidence});store.planState(id,'completed');}
   }
   const timer = setInterval(() => {
     try {
@@ -448,12 +490,14 @@ export function createScheduler(
         )
           throw new Error("Main checkout busy or runtime stopping");
         const plan=store.taskPlan(taskId);
-        if(plan && plan.status!=='executing') throw new Error('Execution not running');
+        if(plan && !['executing','paused'].includes(plan.status)) throw new Error('Approved running or paused execution required');
+        if(plan) {const snap=repositorySnapshot(root),expected=plan.executionSnapshot??plan;if(!plan.approval || snap.baseHead!==expected.baseHead || snap.fingerprint!==expected.fingerprint)throw new Error('Repository stale; revise and approve before integration');}
         const task = store.show(taskId);
         if (task.status !== "accepted")
           throw new Error("Task must be accepted before integration");
         const workspace = store.workspace(taskId);
         if (!workspace) throw new Error("Task has no isolated workspace");
+        if(plan) {const link=store.planLinks(plan.id).find(l=>l.taskId===taskId),step=plan.proposal?.steps.find(s=>s.key===link?.stepKey);if(!step || hash(step.scope)!==hash(workspace.scope) || hash(step.check)!==hash(workspace.check))throw new Error('Workspace scope/check differs from approved task');}
         const runId = store.reserveRun(
           "integration-" + randomBytes(16).toString("hex"),
           "integration:" + workspace.commit,
@@ -462,6 +506,7 @@ export function createScheduler(
         );
         integration = { taskId };
         lastIntegration = { taskId, state: "integrating" };
+        let failedCandidate: Workspace | undefined;
         try {
           workspace.integrated = await integrateWorkspaceAsync(
             root,
@@ -487,8 +532,10 @@ export function createScheduler(
               );
               integration!.check = check;
               const result = await check.done;
-              if (!result.success)
+              if (!result.success) {
+                if(result.reason==='exit' && classifyFailure(result.note,'verification')==='verification')failedCandidate=candidate;
                 throw new Error("Verification failed: " + result.note);
+              }
               return result.note;
             },
           );
@@ -510,6 +557,16 @@ export function createScheduler(
               state: "integration-failed",
               error: String(cause),
             });
+          if(plan && failedCandidate && !stopping && store.plan(plan.id).status==='executing' && store.taskUsage(taskId).rounds<planBudget(plan).maxRounds) {
+            const snapshot=repositorySnapshot(root),expected=store.plan(plan.id).executionSnapshot??plan;
+            if(snapshot.baseHead===expected.baseHead && snapshot.fingerprint===expected.fingerprint && !git(failedCandidate.path,'status','--porcelain')) {
+              const fresh=prepareWorkspace(root,taskId,workspace.scope,workspace.check,'-repair-'+randomBytes(6).toString('hex'));
+              git(fresh.path,'-c','core.hooksPath=/dev/null','merge','--ff-only',git(failedCandidate.path,'rev-parse','HEAD'));
+              fresh.commit=git(fresh.path,'rev-parse','HEAD');
+              store.repairAccepted(taskId,fresh,String(cause));return fresh;
+            }
+          }
+          if(plan && ['executing','paused'].includes(store.plan(plan.id).status))store.planState(plan.id,'paused',String(cause),classifyFailure(String(cause),'integration'));
           throw cause;
         } finally {
           integration = undefined;
