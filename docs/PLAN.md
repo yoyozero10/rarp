@@ -104,7 +104,7 @@ Trạng thái: đã triển khai 2026-10-28, nghiệm thu UI và CI Windows/Ubun
 
 Phase 8 đã triển khai recovery và vòng sửa có ngân sách, live manager 9router + hai worker agy đạt với ngoại lệ quyền được duyệt riêng. UI đã nghiệm thu trên runtime fixture ngày 2026-10-29; CI Windows/Ubuntu Node 24/26 đạt tại commit `4b99c39`. Xem [kiểm chứng Phase 8](PHASE8-VALIDATION.md).
 
-1. M7 đã đóng. Khi dùng Antigravity thường xuyên, cấu hình quyền công cụ phù hợp; runtime giữ nguyên approval gate và không tự bỏ duyệt. Xem [kiểm chứng Phase 7](PHASE7-VALIDATION.md).
+1. M7 đã đóng. Khi dùng Antigravity thường xuyên, cấu hình quyền công cụ phù hợp; runtime giữ nguyên approval gate và không tự bỏ duyệt. Headless bị chặn sẽ trả `jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied`; thêm allow-rule `command(<target>)` vào `permissions.allow` của `~/.gemini/antigravity-cli/settings.json` hoặc thêm repo vào `trustedWorkspaces`. Xem [kiểm chứng Phase 7](PHASE7-VALIDATION.md).
 2. Benchmark tải/log và tài khoản thực tế trước khi nâng capacity trên 4.
 3. Trước tác vụ dài không giám sát: containment tiến trình Windows mạnh hơn và mở rộng kiểm chứng crash recovery.
 4. Bổ sung giao thức waiting_input/waiting_permission khi có adapter tương tác.

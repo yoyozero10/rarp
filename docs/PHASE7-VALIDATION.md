@@ -43,6 +43,8 @@ Bằng chứng live (TEMP, không commit database/log tài khoản):
 - `rarp-phase7-live-Oa6nno`: thử lại Antigravity với `--mode accept-edits`, vẫn bị từ chối quyền; execution paused. Không dùng cờ bỏ duyệt.
 - `rarp-phase7-live-OnkGTI`: planner Codex đạt; worker bị tài khoản chặn vì usage limit.
 
+Probe quyền ngày 2026-10-29 (repo TEMP `agy-perm-c7b0f8`, đã xoá): chạy `agy --sandbox --disable-slash-commands --output-format stream-json --print` không cờ bỏ duyệt. Envelope trả `status: SUCCESS` nhưng rỗng kèm `denied_actions: [{action: "command", display_name: "RunCommand"}]` và stderr `jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. command(<target>)).` Xác nhận: `~/.gemini/antigravity-cli/settings.json` không có key `permissions`; grant trong `~/.gemini/config/config.json` là global nhưng không áp cho print mode, và `cli.log` ghi `ApplyProjectPermissionGrants: no grants for project "CLI Project", cleared project permissions`. Adapter vẫn coi đây là thất bại và dừng với `configuration`.
+
 Các điều kiện đóng đã được kiểm chứng trong vòng nghiệm thu cuối ở trên. Các runtime thử nghiệm đã dừng.
 
 ## Sử dụng
