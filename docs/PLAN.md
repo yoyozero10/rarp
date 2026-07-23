@@ -85,6 +85,7 @@ Trạng thái: đã triển khai 2026-10-28, nghiệm thu UI và CI Windows/Ubun
 - Tích hợp thủ công khi plan `paused`; kiểm tra fingerprint/HEAD/scope/check; conflict giữ workspace, không tự tăng quyền.
 - `resume` idempotent; retry lỗi tạm thời có backoff; dừng khi hết ngân sách, thiếu quyền, conflict hoặc không tiến triển.
 - `completed` chỉ sau khi mọi task tích hợp và lệnh check của plan chạy lại thành công trên checkout cuối.
+- Approval có lựa chọn quyền Antigravity (`antigravityFullAccess`, mặc định `false`); runtime áp `--dangerously-skip-permissions` cho riêng worker Antigravity khi được bật, Codex không đổi.
 
 ## Nhánh mở rộng — Model API qua 9router
 
@@ -105,8 +106,9 @@ Trạng thái: đã triển khai 2026-10-28, nghiệm thu UI và CI Windows/Ubun
 Phase 8 đã triển khai recovery và vòng sửa có ngân sách, live manager 9router + hai worker agy đạt với ngoại lệ quyền được duyệt riêng. UI đã nghiệm thu trên runtime fixture ngày 2026-10-29; CI Windows/Ubuntu Node 24/26 đạt tại commit `4b99c39`. Xem [kiểm chứng Phase 8](PHASE8-VALIDATION.md).
 
 1. M7 đã đóng. Khi dùng Antigravity thường xuyên, cấu hình quyền công cụ phù hợp; runtime giữ nguyên approval gate và không tự bỏ duyệt. Headless bị chặn sẽ trả `jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied`; thêm allow-rule `command(<target>)` vào `permissions.allow` của `~/.gemini/antigravity-cli/settings.json` hoặc thêm repo vào `trustedWorkspaces`. Xem [kiểm chứng Phase 7](PHASE7-VALIDATION.md).
-2. Benchmark tải/log và tài khoản thực tế trước khi nâng capacity trên 4.
-3. Trước tác vụ dài không giám sát: containment tiến trình Windows mạnh hơn và mở rộng kiểm chứng crash recovery.
-4. Bổ sung giao thức waiting_input/waiting_permission khi có adapter tương tác.
+2. Approval Phase 7 có thêm lựa chọn **Quyền Antigravity**: mặc định sandbox, hoặc toàn quyền (`--dangerously-skip-permissions`) do người dùng chọn trước khi phiên bắt đầu. Lựa chọn lưu trong `Approval.antigravityFullAccess`, chỉ áp cho worker Antigravity, muốn đổi phải tạo revision mới. Chỉ nên bật với repo tin cậy và tác vụ có biên rõ.
+3. Benchmark tải/log và tài khoản thực tế trước khi nâng capacity trên 4.
+4. Trước tác vụ dài không giám sát: containment tiến trình Windows mạnh hơn và mở rộng kiểm chứng crash recovery.
+5. Bổ sung giao thức waiting_input/waiting_permission khi có adapter tương tác.
 
 Không cam kết lịch theo ngày trước spike M2: độ ổn định adapter và vòng đời tiến trình Windows là hai yếu tố chưa được đo đủ.
