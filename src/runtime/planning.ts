@@ -4,7 +4,7 @@ import { join, delimiter } from "node:path";
 import { z } from "zod";
 import { codexPlannerCommand, codexReviewCommand } from "../adapters/codex.js";
 import type { CommandSpec } from "../adapters/codex.js";
-import { antigravityCommand } from "../adapters/antigravity.js";
+import { antigravityCommand, withFullAccess } from "../adapters/antigravity.js";
 import { hash, waves, approvalSchema, planBudget, remainingTime } from "../core/plan.js";
 import type { Store } from "../storage/store.js";
 import { runWorker } from "./process.js";
