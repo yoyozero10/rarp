@@ -7,12 +7,26 @@ import {Store} from '../dist/storage/store.js';
 import {repositorySnapshot} from '../dist/runtime/planning.js';
 import {startRuntime,runtimeRequest} from '../dist/runtime/server.js';
 import {git,prepareWorkspace,checkpoint} from '../dist/runtime/workspace.js';
-import {AntigravityStream} from '../dist/adapters/antigravity.js';
-import {remainingTime} from '../dist/core/plan.js';
+import {AntigravityStream,antigravityCommand,withFullAccess} from '../dist/adapters/antigravity.js';
+import {remainingTime,approvalSchema} from '../dist/core/plan.js';
 const command={file:process.execPath,args:[resolve('tests/fixtures/phase7-agent.mjs')]};
 test('Antigravity preserves temporary service errors for retry classification',()=>{
  const stream=new AntigravityStream(()=>{});stream.feed(JSON.stringify({event:'result',result:{status:'ERROR',error:{message:'HTTP 429 rate limit'}}})+'\n');assert.equal(stream.failed,true);assert.equal(stream.failureReason,'HTTP 429 rate limit');
 });
+test('Antigravity full access is opt-in per approval and never touches Codex',()=>{
+ const base=antigravityCommand();
+ assert.ok(!base.args.includes('--dangerously-skip-permissions'));
+ assert.deepEqual(withFullAccess(base,false),base);
+ const full=withFullAccess(base,true);
+ assert.deepEqual(full.args,['--sandbox','--disable-slash-commands','--output-format','stream-json','--dangerously-skip-permissions','--print']);
+ assert.equal(full.protocol,'antigravity');
+ const codex={file:'x',args:['--print']};
+ assert.deepEqual(withFullAccess(codex,true),codex);
+ assert.equal(approvalSchema.parse(approval()).antigravityFullAccess,false);
+ assert.equal(approvalSchema.parse({...approval(),antigravityFullAccess:true}).antigravityFullAccess,true);
+ assert.throws(()=>approvalSchema.parse({...approval(),antigravityFullAccess:'yes'}));
+});
+function approval(){return {revision:1,contentHash:'a'.repeat(64),actor:'human',maxWorkers:1,maxReviewers:1,workers:[{workerRef:'W1',adapter:'antigravity',profile:'default'}],integration:'manual'};}
 function setup(t,rounds=2){
  const root=mkdtempSync(join(tmpdir(),'rarp-phase8-'));
  git(root,'init');git(root,'config','user.name','Tests');git(root,'config','user.email','tests@localhost');
