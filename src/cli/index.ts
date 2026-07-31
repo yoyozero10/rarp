@@ -42,7 +42,7 @@ program
   .command("about")
   .action(() =>
     console.log(
-      "Rarp Phase 6: durable scheduling, parallel isolated workflows and bounded review.",
+      "Rarp Phase 8: goals, plan approval, isolated workflows, bounded review and recovery.",
     ),
   );
 program
