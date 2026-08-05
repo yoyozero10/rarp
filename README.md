@@ -4,9 +4,44 @@ CLI điều phối nhiều AI agent trên máy local: lập kế hoạch, giao v
 
 ## Trạng thái
 
+Có gói cài đặt `.tgz` và lệnh `rarp doctor` để kiểm tra môi trường trước khi chạy. Gói chứa CLI/runtime đã build, dashboard, JSON schemas và tài liệu; máy nhận chỉ cần Node.js >=24, npm, Git và CLI agent muốn dùng. Chưa phát hành lên npm registry; `private: true` vẫn chặn publish ngoài ý muốn.
+
 Phase 8 đã triển khai khôi phục plan dừng, giữ task không đổi qua revision, ngân sách sửa/retry bền vững và kiểm tra toàn bộ checkout trước `completed`. Live manager `9router` với hai worker agy đã đạt trong repo TEMP, dùng ngoại lệ quyền được duyệt riêng. UI đã nghiệm thu trên runtime fixture; CI Windows/Ubuntu với Node 24/26 đạt tại commit `4b99c39`. Xem [kiểm chứng Phase 8](docs/PHASE8-VALIDATION.md).
 
-Bản hiện tại: 77/77 test local, CI xanh. Đây là công cụ tự host cho một người dùng trên một máy: chưa đóng gói phát hành (`private: true`, phải clone + `npm ci` + `npm run build`), chưa có `waiting_input`/`waiting_permission`, chưa giam tiến trình bằng job object trên Windows, chỉ nghe `127.0.0.1`, UI chưa có test tự động. Antigravity headless vẫn cần allow-rule trong `~/.gemini/antigravity-cli/settings.json` hoặc bật **toàn quyền** ở bước duyệt. Chi tiết và thứ tự ưu tiên ở [kế hoạch](docs/PLAN.md).
+Bản nền Phase 8: 77/77 test, CI xanh. Công cụ tự host cho một người dùng trên một máy: chưa publish npm, chưa có `waiting_input`/`waiting_permission`, chưa giam tiến trình bằng job object trên Windows, chỉ nghe `127.0.0.1`, UI chưa có test tự động. Antigravity headless vẫn cần allow-rule trong `~/.gemini/antigravity-cli/settings.json` hoặc bật **toàn quyền** ở bước duyệt. Chi tiết và thứ tự ưu tiên ở [kế hoạch](docs/PLAN.md).
+
+## Đóng gói và cài đặt
+
+Người tạo gói chạy trong checkout nguồn:
+
+```powershell
+npm ci
+npm pack
+```
+
+`npm pack` tự build qua `prepack`, tạo `rarp-0.1.0.tgz`. Gửi file này cho máy nhận. Gói không chứa source, test fixtures, `.rarp`, logs hoặc credential; không cần TypeScript/Vite ở máy nhận.
+
+```powershell
+npm install --global ./rarp-0.1.0.tgz
+rarp --version
+rarp --project "C:\duong-dan\du-an" doctor
+rarp --project "C:\duong-dan\du-an" init
+rarp --project "C:\duong-dan\du-an" runtime start --manager-profile 9router
+rarp --project "C:\duong-dan\du-an" ui
+```
+
+Trên Linux dùng đường dẫn repo tương ứng. Repo cần commit ban đầu và checkout sạch trước khi duyệt plan. Profile `9router` chỉ là ví dụ; bỏ `--manager-profile` để dùng cấu hình mặc định của Codex. Agent CLI và thông tin đăng nhập do người dùng tự cài/cấu hình.
+
+`rarp doctor` chỉ đọc: kiểm tra Node, Git, repo, tài nguyên gói, Codex/Antigravity CLI, trạng thái đăng nhập Codex, cấu hình profile, SQLite và khóa runtime. Không tạo storage, migrate, sửa file, gọi model hoặc cấp quyền. Tùy chọn `--codex PATH`, `--agy PATH`, `--manager-profile NAME` phải khớp cấu hình runtime bạn muốn dùng. `--json` trả báo cáo có cấu trúc; exit code 1 khi có lỗi bắt buộc, cảnh báo trả 0. `ok: true` không xác nhận endpoint/model hay quyền headless đã sẵn sàng; doctor không thực hiện một task AI để kiểm tra chúng.
+
+Kiểm chứng gói trước khi chia sẻ:
+
+```powershell
+npm run build
+npm run test:package
+```
+
+Lệnh này pack bản build, cài production dependencies vào thư mục TEMP độc lập, kiểm tra bin, dashboard/schema và vòng planner → worker → review → integration bằng fixture. Runtime được dừng, thư mục tạm được xóa. Không gọi model thật. CI chạy kiểm chứng gói trên Windows/Ubuntu × Node 24/26.
 
 ## Phase 8: khôi phục và tự sửa có giới hạn
 
