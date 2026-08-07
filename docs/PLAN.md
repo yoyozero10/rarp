@@ -103,6 +103,10 @@ Trạng thái: đã triển khai 2026-10-28, nghiệm thu UI và CI Windows/Ubun
 
 ## Việc tiếp theo
 
+Bước sau Phase 8 (2026-10-30): triển khai `rarp doctor` chỉ đọc, tarball npm với danh sách file cho phép, `prepack` build và kiểm thử cài gói độc lập bằng production dependencies. Thêm kiểm thử gói vào CI Windows/Ubuntu × Node 24/26. Chưa publish npm registry; giữ `private: true` cho đến khi chốt tên gói và chính sách phát hành. Các bước waiting_input/waiting_permission và Windows Job Object vẫn là phạm vi tiếp theo.
+
+Kiểm chứng local Windows Node 26: typecheck/build đạt, 81/81 tests đạt; tarball cài vào TEMP độc lập chạy được CLI, doctor, dashboard/assets, schemas và fixture planner → worker → review → integration. Không gọi model thật; runtime đã dừng và thư mục cài thử được dọn. CI mới chỉ cập nhật workflow, chưa có kết quả remote cho lượt thay đổi này.
+
 Phase 8 đã triển khai recovery và vòng sửa có ngân sách, live manager 9router + hai worker agy đạt với ngoại lệ quyền được duyệt riêng. UI đã nghiệm thu trên runtime fixture ngày 2026-10-29; CI Windows/Ubuntu Node 24/26 đạt tại commit `4b99c39`. Xem [kiểm chứng Phase 8](PHASE8-VALIDATION.md).
 
 1. M7 đã đóng. Khi dùng Antigravity thường xuyên, cấu hình quyền công cụ phù hợp; runtime giữ nguyên approval gate và không tự bỏ duyệt. Headless bị chặn sẽ trả `jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied`; thêm allow-rule `command(<target>)` vào `permissions.allow` của `~/.gemini/antigravity-cli/settings.json` hoặc thêm repo vào `trustedWorkspaces`. Xem [kiểm chứng Phase 7](PHASE7-VALIDATION.md).
