@@ -10,7 +10,10 @@ export const budgetSchema = z.object({
   totalTimeoutMs: z.number().int().min(100).max(3600000),
 }).strict();
 export type Budget = z.infer<typeof budgetSchema>;
-export type StopReason = 'human' | 'budget' | 'worker' | 'review' | 'integration' | 'verification' | 'configuration' | 'repository' | 'no-progress';
+export type StopReason = 'human' | 'budget' | 'worker' | 'review' | 'integration' | 'verification' | 'configuration' | 'permission' | 'repository' | 'no-progress';
+/** A permission denial waits for a human instead of stopping the execution. */
+export const PERMISSION_STATUS = 'waiting_permission';
+export const planStatusFor = (reason: StopReason | undefined) => reason === 'permission' ? PERMISSION_STATUS : 'paused';
 export interface TaskUsage { rounds: number; retries: number; feedback?: string; stopReason?: StopReason; retryAt?: number; signature?: string; }
 export interface Execution { startedAt?: number; elapsedMs?: number; tasks: Record<string, TaskUsage>; verification?: { head: string; passed: boolean; evidence: string[] }; }
 export const safeScope = z.string().min(1).max(240).refine((s) =>
