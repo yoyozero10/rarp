@@ -9,6 +9,7 @@ import { checkpoint, git } from "./workspace.js";
 import type { Workspace } from "./workspace.js";
 
 export function classifyFailure(note: string, fallback: StopReason): StopReason {
+  if (/denied_actions|tool permissions denied|auto-denied/i.test(note)) return 'permission';
   return /permission|denied|unauth|not logged|login|authentication|ENOENT|spawn-error|executable unavailable|forbidden|\b(?:401|403)\b/i.test(note)?'configuration':fallback;
 }
 
@@ -255,12 +256,17 @@ export function runWorkflow(
       if (String(error).includes("cleanup failed")) throw error;
       const currentTask = store.show(taskId);
       const note = String(error).slice(0, 19000);
+      // Detected from the note because TypeScript narrows `failure` to literal assignments.
+      const permission = classifyFailure(note, failure) === "permission";
       if(/deadline|budget exhausted/i.test(note))failure='budget';
       if(cancelled || /Execution paused/.test(note))failure='human';
-      save({feedback:note,stopReason:failure});
+      // A permission denial is a human decision, not a failed attempt: keep the round.
+      if(permission)save({rounds:Math.max(0,usage.rounds-1)});
+      save({feedback:note,stopReason:permission?'permission':failure});
       if (currentTask.attempts.at(-1)?.["id"] === attemptId) {
+        // Permission denials stay resumable: block instead of failing the attempt.
         if (currentTask.status === "running")
-          store.transition(taskId, "failed", task.assigned_to, note);
+          store.transition(taskId, permission ? "blocked" : "failed", task.assigned_to, note);
         if (currentTask.status === "reviewing")
           store.transition(taskId, "failed", task.created_by, note);
       }
