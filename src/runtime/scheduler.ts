@@ -493,7 +493,7 @@ export function createScheduler(
         )
           throw new Error("Main checkout busy or runtime stopping");
         const plan=store.taskPlan(taskId);
-        if(plan && !['executing','paused'].includes(plan.status)) throw new Error('Approved running or paused execution required');
+        if(plan && !['executing','paused','waiting_permission'].includes(plan.status)) throw new Error('Approved running or paused execution required');
         if(plan) {const snap=repositorySnapshot(root),expected=plan.executionSnapshot??plan;if(!plan.approval || snap.baseHead!==expected.baseHead || snap.fingerprint!==expected.fingerprint)throw new Error('Repository stale; revise and approve before integration');}
         const task = store.show(taskId);
         if (task.status !== "accepted")
@@ -569,7 +569,7 @@ export function createScheduler(
               store.repairAccepted(taskId,fresh,String(cause));return fresh;
             }
           }
-          if(plan && ['executing','paused'].includes(store.plan(plan.id).status))store.planState(plan.id,'paused',String(cause),classifyFailure(String(cause),'integration'));
+          if(plan && ['executing','paused','waiting_permission'].includes(store.plan(plan.id).status))store.planState(plan.id,'paused',String(cause),classifyFailure(String(cause),'integration'));
           throw cause;
         } finally {
           integration = undefined;

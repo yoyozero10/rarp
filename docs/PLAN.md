@@ -113,7 +113,7 @@ Phase 8 đã triển khai recovery và vòng sửa có ngân sách, live manager
 2. Approval Phase 7 có thêm lựa chọn **Quyền Antigravity**: mặc định sandbox, hoặc toàn quyền (`--dangerously-skip-permissions`) do người dùng chọn trước khi phiên bắt đầu. Lựa chọn lưu trong `Approval.antigravityFullAccess`, chỉ áp cho worker Antigravity, muốn đổi phải tạo revision mới. Chỉ nên bật với repo tin cậy và tác vụ có biên rõ.
 3. Plan bị từ chối quyền vào trạng thái `waiting_permission` thay vì `failed`: task về `blocked`, vòng làm việc không bị trừ, nút **Đã cấp quyền, tiếp tục** gọi `resume`. Chi tiết trong `tests/permission.test.mjs`.
 4. Benchmark tải/log và tài khoản thực tế trước khi nâng capacity trên 4.
-5. Trước tác vụ dài không giám sát: `worker-host` tự thoát khi runtime chết (`taskkill /T /F`), nhưng tiến trình cháu không nằm trong cây đó. Windows Job Object vẫn cần cho containment đầy đủ.
+5. Trước tác vụ dài không giám sát: `worker-host` tự thoát khi runtime chết (`taskkill /T /F`, có watchdog 1 giây vì kênh IPC Windows có thể còn mở sau SIGKILL; test trong `tests/runtime.test.mjs`), nhưng tiến trình cháu không nằm trong cây đó. Windows Job Object vẫn cần cho containment đầy đủ.
 6. Bổ sung giao thức waiting_input khi có adapter tương tác.
 
 Không cam kết lịch theo ngày trước spike M2: độ ổn định adapter và vòng đời tiến trình Windows là hai yếu tố chưa được đo đủ.
