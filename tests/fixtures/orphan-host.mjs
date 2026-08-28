@@ -5,6 +5,8 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const root = process.argv[2];
 const host = fork(resolve("dist/runtime/worker-host.js"), [], {
+  // Mirror runWorker: on POSIX the host must be a group leader for killTree().
+  detached: process.platform !== "win32",
   stdio: ["ignore", "ignore", "ignore", "ipc"],
 });
 host.send({
