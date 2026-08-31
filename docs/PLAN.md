@@ -103,9 +103,9 @@ Trạng thái: đã triển khai 2026-10-28, nghiệm thu UI và CI Windows/Ubun
 
 ## Việc tiếp theo
 
-Bước sau Phase 8 (2026-10-30): triển khai `rarp doctor` chỉ đọc, tarball npm với danh sách file cho phép, `prepack` build và kiểm thử cài gói độc lập bằng production dependencies. Thêm kiểm thử gói vào CI Windows/Ubuntu × Node 24/26. Chưa publish npm registry; giữ `private: true` cho đến khi chốt tên gói và chính sách phát hành. Các bước waiting_input/waiting_permission và Windows Job Object vẫn là phạm vi tiếp theo.
+Bước sau Phase 8 (2026-10-30): triển khai `rarp doctor` chỉ đọc, tarball npm với danh sách file cho phép, `prepack` build và kiểm thử cài gói độc lập bằng production dependencies. Thêm kiểm thử gói vào CI Windows/Ubuntu × Node 24/26. Chưa publish npm registry; giữ `private: true` cho đến khi chốt tên gói và chính sách phát hành. `waiting_permission` đã xong; `waiting_input` và Windows Job Object vẫn là phạm vi tiếp theo.
 
-Kiểm chứng local Windows Node 26: typecheck/build đạt, 81/81 tests đạt; tarball cài vào TEMP độc lập chạy được CLI, doctor, dashboard/assets, schemas và fixture planner → worker → review → integration. Không gọi model thật; runtime đã dừng và thư mục cài thử được dọn. CI mới chỉ cập nhật workflow, chưa có kết quả remote cho lượt thay đổi này.
+Kiểm chứng local Windows Node 26 tại commit `b73ac15`: typecheck/build đạt, 84/84 tests đạt; tarball cài vào TEMP độc lập chạy được CLI, doctor, dashboard/assets, schemas và fixture planner → worker → review → integration. Không gọi model thật; runtime đã dừng và thư mục cài thử được dọn. CI Windows/Ubuntu × Node 24/26 xanh (run 40957527058).
 
 Phase 8 đã triển khai recovery và vòng sửa có ngân sách, live manager 9router + hai worker agy đạt với ngoại lệ quyền được duyệt riêng. UI đã nghiệm thu trên runtime fixture ngày 2026-10-29; CI Windows/Ubuntu Node 24/26 đạt tại commit `4b99c39`. Xem [kiểm chứng Phase 8](PHASE8-VALIDATION.md).
 
