@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { api } from "./client";
 import type { Goal, Plan, Proposal, Approval, Budget, TaskUsage } from "../src/core/plan";
+import { planLabel, planActions, planEditable, planRemaining, planCanIntegrate, planActionLabel } from "../src/core/planview";
 
 type Profile = { id:string; adapter:string; profile:string; model:string|null; available:boolean; supported:boolean; authenticated:boolean|null };
 type Detail = Plan & { budget: Budget|null; remainingMs:number|null; waves: string[][]; history: unknown[]; tasks: { stepKey: string; taskId: string; task: {status:string; title:string; reviews:{feedback:string}[]}; usage:TaskUsage; workspace?: {integrated:boolean} }[]; logs: unknown[] };
-const stateNames: Record<string,string> = {received:"Đã nhận", analyzing:"Đang phân tích", needs_clarification:"Cần làm rõ", awaiting_approval:"Chờ duyệt", executing:"Đang thực thi", completed:"Hoàn tất", paused:"Tạm dừng", waiting_permission:"Chờ cấp quyền", failed:"Lỗi", rejected:"Đã từ chối", cancelled:"Đã hủy", revision_requested:"Cần phân tích lại"};
 export function Planning({ maxWorkers, maxReviewers, eventId }: { maxWorkers:number; maxReviewers:number; eventId:number }) {
   const [plans,setPlans]=useState<Plan[]>([]), [goals,setGoals]=useState<Goal[]>([]), [id,setId]=useState(sessionStorage.getItem("rarp-plan")??""), [detail,setDetail]=useState<Detail|null>(null);
   const [title,setTitle]=useState(localStorage.getItem("rarp-goal-title")??""), [requirements,setRequirements]=useState(localStorage.getItem("rarp-goal-requirements")??""), [acceptance,setAcceptance]=useState(localStorage.getItem("rarp-goal-acceptance")??""), [limit,setLimit]=useState(Math.min(4,maxWorkers));
@@ -19,14 +19,14 @@ export function Planning({ maxWorkers, maxReviewers, eventId }: { maxWorkers:num
   useEffect(()=>{localStorage.setItem("rarp-goal-title",title);localStorage.setItem("rarp-goal-requirements",requirements);localStorage.setItem("rarp-goal-acceptance",acceptance);},[title,requirements,acceptance]);
   useEffect(()=>{const p=detail?.proposal;if(!p)return;let saved: Approval["workers"] | undefined;try{const value:unknown=JSON.parse(localStorage.getItem(`rarp-bindings-${detail.id}-${detail.revision}`)??"null");if(Array.isArray(value)&&value.length===p.workers.length&&value.every((w,i)=>w?.workerRef===p.workers[i]?.workerRef&&["codex","antigravity"].includes(w.adapter)&&typeof w.profile==="string"))saved=value;}catch{}setBindings(detail.approval?.workers??saved??p.workers.map(w=>({workerRef:w.workerRef,adapter:"codex",profile:"default"})));setSlots(detail.approval?.maxWorkers??p.maxWorkers);setReviewers(detail.approval?.maxReviewers??1);setIntegration(detail.approval?.integration??"reviewed-local");setFullAccess(detail.approval?.antigravityFullAccess??false);setBudget(detail.approval?.budget??{...p.policy,maxRetries:p.policy.maxRetries??2});setConfirm(false);},[detail?.id,detail?.revision]);
   async function run(fn:()=>Promise<void>) {if(busy)return;setBusy(true);setError("");try{await fn();await refresh();}catch(e){setError(String(e));}finally{setBusy(false);}}
-  const proposal=detail?.proposal, editable=!!detail&&["received","awaiting_approval","needs_clarification","failed","revision_requested","rejected","paused"].includes(detail.status), goal=goals.find(g=>g.id===detail?.goalId);
+  const proposal=detail?.proposal, editable=!!detail&&planEditable(detail.status), goal=goals.find(g=>g.id===detail?.goalId);
   function control(action:string){void run(async()=>{setDetail(await api<Detail>(`plans/${id}/${action}`,{}));});}
   return <section className="planning" aria-label="Lập kế hoạch mục tiêu">
     <h2>Mục tiêu → Đề xuất → Chọn CLI & duyệt → Thực thi</h2>
     <p className="muted">Manager: Codex CLI · profile {managerProfile??"mặc định"}.</p>
     <p className="muted">Chỉ phân tích trước khi duyệt. Không khởi chạy worker, build hay test tự động ở bước đề xuất.</p>
     {error&&<p role="alert" className="alert">{error}</p>}
-    <label>Kế hoạch đã lưu<select value={id} onChange={e=>setId(e.target.value)}><option value="">Mục tiêu mới</option>{plans.map(p=><option key={p.id} value={p.id}>{goals.find(g=>g.id===p.goalId)?.title??p.id} · r{p.revision} · {stateNames[p.status]??p.status}</option>)}</select></label>
+    <label>Kế hoạch đã lưu<select value={id} onChange={e=>setId(e.target.value)}><option value="">Mục tiêu mới</option>{plans.map(p=><option key={p.id} value={p.id}>{goals.find(g=>g.id===p.goalId)?.title??p.id} · r{p.revision} · {planLabel(p.status)}</option>)}</select></label>
     {!id?<form onSubmit={e=>{e.preventDefault();void run(async()=>{const created=await api<{goal:Goal;plan:Plan}>("goals",{title,requirements,acceptance:acceptance.split("\n").map(s=>s.trim()).filter(Boolean),maxWorkers:limit});setId(created.plan.id);});}}>
       <label>Mục tiêu<input required maxLength={500} value={title} onChange={e=>setTitle(e.target.value)}/></label>
       <label>Yêu cầu<textarea required value={requirements} onChange={e=>setRequirements(e.target.value)}/></label>
@@ -34,7 +34,7 @@ export function Planning({ maxWorkers, maxReviewers, eventId }: { maxWorkers:num
       <label>Giới hạn worker<input type="number" min={1} max={Math.min(16,maxWorkers)} value={limit} onChange={e=>setLimit(Number(e.target.value))}/></label>
       <button disabled={busy} className="primary">Lưu mục tiêu</button>
     </form>:!detail?<p>Đang tải kế hoạch…</p>:<>
-      <h3>{goal?.title} · {stateNames[detail.status]??detail.status}</h3><p>{goal?.requirements}</p>
+      <h3>{goal?.title} · {planLabel(detail.status)}</h3><p>{goal?.requirements}</p>
       <p>Revision {detail.revision} · HEAD <code>{detail.baseHead||"chưa phân tích"}</code></p><p className="plan-hash">Hash <code>{detail.contentHash||"chưa có"}</code></p>
       {detail.note&&<p role="status">{detail.stopReason && <strong>{detail.stopReason}: </strong>}{detail.note}</p>}
       {detail.budget&&<p>Thời gian còn lại: {Math.ceil((detail.remainingMs??0)/1000)} giây. Chỉ hoàn tất sau tích hợp và kiểm tra toàn bộ.</p>}
@@ -67,12 +67,12 @@ export function Planning({ maxWorkers, maxReviewers, eventId }: { maxWorkers:num
           <button className="primary" disabled={!confirm||!!edit} onClick={()=>void run(async()=>{setDetail(await api<Detail>(`plans/${id}/approve`,{revision:detail.revision,contentHash:detail.contentHash,actor:"human",maxWorkers:slots,maxReviewers:reviewers,workers:bindings,integration,antigravityFullAccess:fullAccess,budget} satisfies Approval));setConfirm(false);})}>Duyệt và chạy</button>
         </fieldset>}
       </>}
-      <div className="toolbar">{editable&&detail.status!=="paused"&&<button disabled={busy} onClick={()=>control("reject")}>Từ chối</button>}{detail.status==="executing"&&<button disabled={busy} onClick={()=>control("pause")}>Tạm dừng kế hoạch</button>}{detail.status==="paused"&&<button disabled={busy} onClick={()=>control("resume")}>Tiếp tục kế hoạch</button>}{detail.status==="waiting_permission"&&<button disabled={busy} onClick={()=>control("resume")}>Đã cấp quyền, tiếp tục</button>}{!["completed","cancelled","rejected"].includes(detail.status)&&<button disabled={busy} onClick={()=>control("cancel")}>Hủy riêng kế hoạch</button>}</div>
+      <div className="toolbar">{planActions(detail.status).map(action=><button key={action} disabled={busy} onClick={()=>control(action)}>{planActionLabel(action,detail.status)}</button>)}</div>
       {!!detail.tasks.length&&<><h3>Thực thi</h3><ul>{detail.tasks.map(t=><li key={t.taskId}>
-        {t.task.title} · {t.task.status} · {t.workspace?.integrated?"đã tích hợp":"chưa tích hợp"} · Còn {Math.max(0,(detail.budget?.maxRounds??0)-t.usage.rounds)} lượt làm, {Math.max(0,(detail.budget?.maxRetries??0)-t.usage.retries)} retry
+        {t.task.title} · {t.task.status} · {t.workspace?.integrated?"đã tích hợp":"chưa tích hợp"} · Còn {planRemaining(t.usage.rounds,detail.budget?.maxRounds??0)} lượt làm, {planRemaining(t.usage.retries,detail.budget?.maxRetries??0)} retry
         {(t.usage.feedback??t.task.reviews.at(-1)?.feedback)&&<p>Feedback: {t.usage.feedback??t.task.reviews.at(-1)?.feedback}</p>}
         {["failed","changes_requested","blocked"].includes(t.task.status)&&editable&&<button disabled={busy} onClick={()=>setEdit(JSON.stringify(proposal,null,2))}>Sửa task / xin duyệt revision</button>}
-        {t.task.status==="accepted"&&!t.workspace?.integrated&&["executing","paused"].includes(detail.status)&&<button disabled={busy} onClick={()=>void run(async()=>{await api("integrate",{taskId:t.taskId,async:true});})}>Tích hợp task đã duyệt</button>}
+        {t.task.status==="accepted"&&!t.workspace?.integrated&&planCanIntegrate(detail.status)&&<button disabled={busy} onClick={()=>void run(async()=>{await api("integrate",{taskId:t.taskId,async:true});})}>Tích hợp task đã duyệt</button>}
       </li>)}</ul></>}
       {detail.history?.length>0&&<details><summary>Lịch sử revision (so sánh đề xuất cũ)</summary><pre>{JSON.stringify(detail.history,null,2)}</pre></details>}
       <details><summary>Nhật ký phân tích riêng</summary><pre>{JSON.stringify(detail.logs,null,2)}</pre></details>
