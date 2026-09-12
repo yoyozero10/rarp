@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { goalSchema, approvalSchema, validateProposal, hash, planBudget, remainingTime, planStatusFor } from "../core/plan.js";
+import { goalSchema, approvalSchema, validateProposal, hash, planBudget, remainingTime, planStatusFor, inputAnswerSchema } from "../core/plan.js";
 import type { Goal, Plan, Approval, StopReason, TaskUsage, Execution } from "../core/plan.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, existsSync } from "node:fs";
@@ -145,6 +145,18 @@ export class Store {
   saveUsage(taskId: string, patch: Partial<TaskUsage>) {
     this.transaction(()=>{const p=this.taskPlan(taskId);if(!p)return;const e=this.execution(p);e.tasks[taskId]={...(e.tasks[taskId]??{rounds:0,retries:0}),...patch};this.event('execution.usage',null,taskId,null,{planId:p.id,revision:p.revision,...e.tasks[taskId]});this.writePlan(p);});
   }
+  answerPlanInput(id: string, input: {taskId:string;requestId:string;answer:string}) {
+    input=inputAnswerSchema.parse(input);
+    return this.transaction(()=>{
+      const p=this.plan(id), usage=p.execution?.tasks[input.taskId], request=usage?.input;
+      if(!p.approval || !['waiting_input','paused'].includes(p.status) || !this.planLinks(id).some(l=>l.taskId===input.taskId) || this.show(input.taskId).status!=='blocked' || !request || request.requestId!==input.requestId || this.show(input.taskId).attempts.at(-1)?.['id']!==input.requestId)
+        throw new Error('Stale or unavailable input request');
+      if(request.answer!==undefined && request.answer!==input.answer) throw new Error('Input request already answered');
+      request.answer=input.answer;
+      this.writePlan(p);
+      return p;
+    });
+  }
   startExecution(id: string) {
     return this.transaction(()=>{const p=this.plan(id);const e=this.execution(p);e.startedAt??=Date.now();this.writePlan(p);return e.startedAt+planBudget(p).totalTimeoutMs-(e.elapsedMs??0);});
   }
@@ -162,8 +174,9 @@ export class Store {
     });
   }
   retryPlan(id: string) {
-    return this.transaction(()=>{const p=this.plan(id);if(!p.approval || !['paused','waiting_permission','executing'].includes(p.status))throw new Error('Approved execution required');
+    return this.transaction(()=>{const p=this.plan(id);if(!p.approval || !['paused','waiting_permission','waiting_input','executing'].includes(p.status))throw new Error('Approved execution required');
       const e=this.execution(p), budget=planBudget(p);
+      if(this.planLinks(id).some(l=>{const input=e.tasks[l.taskId]?.input;return input && input.answer===undefined;}))throw new Error('Answer pending input requests before resuming');
       if(remainingTime(p)<=0)throw new Error('Time budget exhausted; approve a larger budget in a new revision');
       for(const l of this.planLinks(id)) {
         const task=this.show(l.taskId),usage=e.tasks[task.id]??{rounds:0,retries:0};
@@ -198,7 +211,7 @@ export class Store {
     const approval=approvalSchema.parse(input);
     return this.transaction(()=>{ const p=this.plan(id);
       if(p.revision!==approval.revision || p.contentHash!==approval.contentHash) throw new Error('Stale approval revision/hash');
-      if(p.approval && hash(p.approval)===hash(approval) && ['executing','paused','waiting_permission','completed'].includes(p.status)) { if(hash(p.bindings??{})!==hash(bindings)) throw new Error('Approved profile configuration changed'); return p; }
+      if(p.approval && hash(p.approval)===hash(approval) && ['executing','paused','waiting_permission','waiting_input','completed'].includes(p.status)) { if(hash(p.bindings??{})!==hash(bindings)) throw new Error('Approved profile configuration changed'); return p; }
       if(p.status!=='awaiting_approval' || !p.proposal || p.proposal.questions.length) throw new Error('Plan is not awaiting approval');
       if(p.baseHead!==baseHead || p.fingerprint!==fingerprint) throw new Error('Repository stale; analyze again');
       const refs=new Set(approval.workers.map(w=>w.workerRef)); if(refs.size!==approval.workers.length || refs.size!==p.proposal.workers.length || p.proposal.workers.some(w=>!refs.has(w.workerRef))) throw new Error('Worker binding mismatch');

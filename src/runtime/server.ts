@@ -146,6 +146,7 @@ export async function startRuntime(
         else if(kind==='plans' && id && action==='update') reply(planning.update(id,input));
         else if(kind==='plans' && id && action==='analyze') reply(await planning.analyze(id,input));
         else if(kind==='plans' && id && action==='approve') reply(planning.approve(id,input),202);
+        else if(kind==='plans' && id && action==='answer') reply(planning.answer(id,input));
         else if(kind==='plans' && id && ['reject','cancel','pause','resume'].includes(action??'')) reply(await planning.control(id,action!));
         else reply({error:'Unknown route'},404);
         return;
