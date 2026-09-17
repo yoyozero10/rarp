@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { loadProfiles, available, profileCommand } from '../runtime/planning.js';
 import { codexCommand } from '../adapters/codex.js';
+import { isContainmentAvailable } from '../runtime/win32-job.js';
 
 type Check = { name: string; status: 'pass' | 'warn' | 'fail'; detail: string; fix?: string };
 export function doctor(project: string, options: { codex: string; agy: string; managerProfile?: string }) {
@@ -71,7 +72,8 @@ export function doctor(project: string, options: { codex: string; agy: string; m
   }else add('runtime','pass','No runtime lock');
   if(process.platform==='win32') {
     const kill=probe('taskkill',['/?']);add('process-cleanup',kill.status===0?'pass':'fail','Windows taskkill availability','Ensure taskkill is available on PATH.');
-    add('containment','warn','Windows Job Object containment is not implemented','Supervise long-running work; detached descendants are not fully contained.');
+    const containment=isContainmentAvailable();
+    add('containment',containment?'pass':'warn',containment?'Windows Job Object containment active (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)':'Windows Job Object containment is not implemented',containment?undefined:'Supervise long-running work; detached descendants are not fully contained.');
   }
   return {ok:checks.every(c=>c.status!=='fail'),project:root,checks};
 }
