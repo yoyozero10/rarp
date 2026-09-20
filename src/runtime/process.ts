@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { CodexStream } from "../adapters/codex.js";
 import { AntigravityStream } from "../adapters/antigravity.js";
 import type { CommandSpec } from "../adapters/codex.js";
+import { createJobContainer, type Win32Job } from "./win32-job.js";
 
 const exec = promisify(execFile);
 export interface WorkerResult {
@@ -29,6 +30,10 @@ export function runWorker(
       execArgv: [],
     },
   );
+  const job =
+    host.pid && process.platform === "win32"
+      ? createJobContainer(host.pid)
+      : undefined;
   let finishing = false;
   let bytes = 0;
   let diagnostics = '';
@@ -67,13 +72,35 @@ export function runWorker(
       reason = "protocol-error";
     }
     try {
+      job?.terminate();
       if (host.pid) {
-        if (process.platform === "win32")
-          await exec("taskkill", ["/PID", String(host.pid), "/T", "/F"], {
-            windowsHide: true,
-            timeout: 10000,
-          });
-        else {
+        if (process.platform === "win32") {
+          try {
+            await exec("taskkill", ["/PID", String(host.pid), "/T", "/F"], {
+              windowsHide: true,
+              timeout: 10000,
+            });
+          } catch (error: unknown) {
+            const err = error as {
+              code?: number | string;
+              exitCode?: number;
+              stderr?: string;
+              message?: string;
+            };
+            const code = err.code;
+            const exitCode = err.exitCode;
+            const stderr = String(err.stderr ?? err.message ?? "");
+            if (
+              code !== 128 &&
+              code !== 1 &&
+              exitCode !== 128 &&
+              exitCode !== 1 &&
+              !/not found|không tìm thấy|no running instance/i.test(stderr)
+            ) {
+              throw error;
+            }
+          }
+        } else {
           try {
             process.kill(-host.pid, "SIGKILL");
           } catch (e) {
@@ -140,7 +167,19 @@ export function runWorker(
   );
   try {
     if (host.pid) onSpawn?.(host.pid);
-    host.send({ command, root, prompt });
+    if (job) {
+      void job.ready.then(() => {
+        if (!finishing) {
+          try {
+            host.send({ command, root, prompt });
+          } catch {
+            void finish("tracking-error");
+          }
+        }
+      });
+    } else {
+      host.send({ command, root, prompt });
+    }
   } catch {
     void finish("tracking-error");
   }
