@@ -8,6 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Store } from "../dist/storage/store.js";
 import { startRuntime, runtimeRequest } from "../dist/runtime/server.js";
 import { CodexStream } from "../dist/adapters/codex.js";
+import { runWorker } from "../dist/runtime/process.js";
 
 async function fixture(t, mode) {
   const root = mkdtempSync(join(tmpdir(), "rarp-runtime-"));
@@ -123,3 +124,60 @@ test("worker host kills its CLI child when the parent runtime dies", async () =>
     }
   });
 });
+
+test("runWorker ignores taskkill exit code 128/1 when process already exited", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rarp-clean-exit-"));
+  const worker = runWorker(
+    {
+      file: process.execPath,
+      args: ["-e", "process.exit(0)"],
+      protocol: "check",
+    },
+    root,
+    "",
+    5000,
+    () => {},
+  );
+  const result = await worker.done;
+  assert.equal(result.success, true);
+});
+
+if (process.platform === "win32") {
+  test("Windows Job Object containment terminates detached grandchildren on worker finish", async () => {
+    const root = mkdtempSync(join(tmpdir(), "rarp-job-test-"));
+    const script = `
+      const { spawn } = require('node:child_process');
+      const { writeFileSync } = require('node:fs');
+      const grandchild = spawn(process.execPath, ['-e', 'setInterval(()=>{}, 1000)'], {
+        detached: true,
+        stdio: 'ignore'
+      });
+      writeFileSync('${join(root, "detached.pid").replace(/\\/g, "\\\\")}', String(grandchild.pid));
+      setInterval(() => {}, 1000);
+    `;
+    const worker = runWorker(
+      {
+        file: process.execPath,
+        args: ["-e", script],
+        protocol: "agent",
+      },
+      root,
+      "",
+      10000,
+      () => {},
+    );
+    await until(() => existsSync(join(root, "detached.pid")));
+    const detachedPid = Number(readFileSync(join(root, "detached.pid"), "utf8"));
+    assert.equal(process.kill(detachedPid, 0), true);
+    await worker.cancel();
+    await until(() => {
+      try {
+        process.kill(detachedPid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+  });
+}
+
