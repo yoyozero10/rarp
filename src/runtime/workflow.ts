@@ -97,6 +97,7 @@ export function runWorkflow(
       );
       const result = await current.done;
       current = undefined;
+      store.flush();
       check();
       if (!result.success) {
         failure=classifyFailure(result.note,review?'review':'worker');
@@ -284,6 +285,10 @@ export function runWorkflow(
         rounds: round,
         reason: note,
       };
+    } finally {
+      try {
+        store.flush();
+      } catch {}
     }
   })();
   return {
@@ -295,6 +300,9 @@ export function runWorkflow(
       cancelled = true;
       cancellation.abort();
       if (current) await current.cancel();
+      try {
+        store.flush();
+      } catch {}
       await done;
     },
     snapshot: () => ({ stage, round, attemptId, pid: current?.pid }),
