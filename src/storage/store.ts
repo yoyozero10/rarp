@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import type { StatementSync } from "node:sqlite";
 import { goalSchema, approvalSchema, validateProposal, hash, planBudget, remainingTime, planStatusFor, inputAnswerSchema } from "../core/plan.js";
 import type { Goal, Plan, Approval, StopReason, TaskUsage, Execution } from "../core/plan.js";
 import { randomUUID } from "node:crypto";
@@ -34,6 +35,19 @@ PRAGMA user_version = 1;`;
 export class Store {
   private db: DatabaseSync;
   private projectId = "";
+  private statementCache = new Map<string, StatementSync>();
+  private eventQueue: Array<{
+    type: string;
+    actor: string | null;
+    taskId: string | null;
+    attemptId: string | null;
+    payload: unknown;
+    createdAt: string;
+  }> = [];
+  private flushTimer: NodeJS.Timeout | undefined;
+  private inTransaction = false;
+  private flushing = false;
+  private closed = false;
   constructor(root: string, initialize = false) {
     const directory = join(resolve(root), ".rarp");
     const file = join(directory, "state.db");
@@ -43,10 +57,10 @@ export class Store {
     this.db = new DatabaseSync(file);
     try {
       this.db.exec(
-        "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;",
+        "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 30000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA wal_autocheckpoint = 1000;",
       );
       this.transaction(() => {
-        const version = this.db.prepare("PRAGMA user_version").get()![
+        const version = this.prepare("PRAGMA user_version").get()![
           "user_version"
         ];
         if (![0, 1, 2, 3, 4].includes(Number(version)))
@@ -95,22 +109,131 @@ export class Store {
       throw error;
     }
   }
-  close() {
-    this.db.close();
+  private prepare(sql: string): StatementSync {
+    let stmt = this.statementCache.get(sql);
+    if (!stmt) {
+      stmt = this.db.prepare(sql);
+      this.statementCache.set(sql, stmt);
+    }
+    return stmt;
   }
-  goals(): Goal[] { return this.db.prepare("SELECT data FROM goals ORDER BY rowid").all().map(r=>JSON.parse(String(r['data'])) as Goal); }
+  flush() {
+    if (this.flushTimer !== undefined) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+    if (this.closed || this.flushing || this.eventQueue.length === 0) return;
+    this.flushing = true;
+    const batch = this.eventQueue;
+    this.eventQueue = [];
+    try {
+      const insertStmt = this.prepare(
+        "INSERT INTO events(project_id,type,agent_id,task_id,attempt_id,payload,created_at) VALUES(?,?,?,?,?,?,?)",
+      );
+      if (this.inTransaction) {
+        for (const item of batch) {
+          insertStmt.run(
+            this.projectId,
+            item.type,
+            item.actor,
+            item.taskId,
+            item.attemptId,
+            JSON.stringify(item.payload),
+            item.createdAt,
+          );
+        }
+        return;
+      }
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        for (const item of batch) {
+          insertStmt.run(
+            this.projectId,
+            item.type,
+            item.actor,
+            item.taskId,
+            item.attemptId,
+            JSON.stringify(item.payload),
+            item.createdAt,
+          );
+        }
+        this.db.exec("COMMIT");
+      } catch (error) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {}
+        this.eventQueue.unshift(...batch);
+        throw error;
+      }
+    } finally {
+      this.flushing = false;
+    }
+  }
+  private scheduleFlush() {
+    if (this.flushTimer || this.closed) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = undefined;
+      try {
+        this.flush();
+      } catch {
+        if (this.eventQueue.length > 0 && !this.closed) {
+          this.scheduleFlush();
+        }
+      }
+    }, 50);
+    this.flushTimer.unref?.();
+  }
+  private queueEvent(
+    type: string,
+    actor: string | null,
+    taskId: string | null,
+    attemptId: string | null,
+    payload: unknown,
+  ) {
+    if (this.closed) return;
+    this.eventQueue.push({
+      type,
+      actor,
+      taskId,
+      attemptId,
+      payload,
+      createdAt: new Date().toISOString(),
+    });
+    if (this.eventQueue.length >= 50) {
+      this.flush();
+    } else {
+      this.scheduleFlush();
+    }
+  }
+  close() {
+    if (this.closed) return;
+    try {
+      this.flush();
+    } finally {
+      this.closed = true;
+      if (this.flushTimer !== undefined) {
+        clearTimeout(this.flushTimer);
+        this.flushTimer = undefined;
+      }
+      this.statementCache.clear();
+      try {
+        this.db.close();
+      } catch {}
+    }
+  }
+  goals(): Goal[] { return this.prepare("SELECT data FROM goals ORDER BY rowid").all().map(r=>JSON.parse(String(r['data'])) as Goal); }
   goal(id: string) { const value=this.goals().find(g=>g.id===id); if(!value) throw new Error('Unknown goal'); return value; }
-  plans(): Plan[] { return this.db.prepare("SELECT data FROM plans ORDER BY rowid").all().map(r=>JSON.parse(String(r['data'])) as Plan); }
-  plan(id: string): Plan { const row=this.db.prepare('SELECT data FROM plans WHERE id=?').get(id); if(!row) throw new Error('Unknown plan'); return JSON.parse(String(row['data'])) as Plan; }
+  plans(): Plan[] { return this.prepare("SELECT data FROM plans ORDER BY rowid").all().map(r=>JSON.parse(String(r['data'])) as Plan); }
+  plan(id: string): Plan { const row=this.prepare('SELECT data FROM plans WHERE id=?').get(id); if(!row) throw new Error('Unknown plan'); return JSON.parse(String(row['data'])) as Plan; }
   private writePlan(plan: Plan) {
-    this.db.prepare('UPDATE plans SET data=? WHERE id=?').run(JSON.stringify(plan),plan.id);
-    this.db.prepare('UPDATE goals SET data=json_set(data,\'$.status\',?) WHERE id=?').run(plan.status,plan.goalId);
+    this.prepare('UPDATE plans SET data=? WHERE id=?').run(JSON.stringify(plan),plan.id);
+    this.prepare('UPDATE goals SET data=json_set(data,\'$.status\',?) WHERE id=?').run(plan.status,plan.goalId);
     this.event('plan.updated',null,null,null,{planId:plan.id,status:plan.status,revision:plan.revision});
   }
   createGoal(input: unknown) {
     const goal: Goal={...goalSchema.parse(input),id:'goal-'+randomUUID(),status:'received',createdAt:new Date().toISOString()};
     const plan: Plan={id:'plan-'+randomUUID(),goalId:goal.id,revision:0,contentHash:'',baseHead:'',fingerprint:'',status:'received',proposal:null,createdAt:goal.createdAt};
-    this.transaction(()=>{ this.db.prepare('INSERT INTO goals VALUES(?,?)').run(goal.id,JSON.stringify(goal)); this.db.prepare('INSERT INTO plans VALUES(?,?,?)').run(plan.id,goal.id,JSON.stringify(plan)); this.event('goal.created',null,null,null,{goalId:goal.id,planId:plan.id}); });
+    this.transaction(()=>{ this.prepare('INSERT INTO goals VALUES(?,?)').run(goal.id,JSON.stringify(goal)); this.prepare('INSERT INTO plans VALUES(?,?,?)').run(plan.id,goal.id,JSON.stringify(plan)); this.event('goal.created',null,null,null,{goalId:goal.id,planId:plan.id}); });
     return {goal,plan};
   }
   updatePlan(id: string, revision: number, input: unknown, baseHead: string, fingerprint: string) {
@@ -125,10 +248,10 @@ export class Store {
         // Accepted dependents cannot keep evidence from a replaced prerequisite.
         const sameDependencies=(stepKey:string):boolean=>{const a=plan.proposal?.steps.find(s=>s.key===stepKey),b=proposal.steps.find(s=>s.key===stepKey);return hash(a??null)===hash(b??null) && !!a && a.dependencies.every(sameDependencies);};
         if(task.status==='accepted' && !sameDependencies(link.stepKey)) throw new Error('Accepted dependencies must remain unchanged');
-        for(const d of this.dispatches().filter(d=>d.taskId===task.id && d.state==='waiting')) {d.state='cancelled';d.note='Superseded revision';this.db.prepare('UPDATE dispatches SET state=?,data=? WHERE request_key=?').run(d.state,JSON.stringify(d),d.key);}
-        if(!unchanged || task.status==='cancelled') this.db.prepare('DELETE FROM plan_task_links WHERE plan_id=? AND step_key=?').run(id,link.stepKey);
+        for(const d of this.dispatches().filter(d=>d.taskId===task.id && d.state==='waiting')) {d.state='cancelled';d.note='Superseded revision';this.prepare('UPDATE dispatches SET state=?,data=? WHERE request_key=?').run(d.state,JSON.stringify(d),d.key);}
+        if(!unchanged || task.status==='cancelled') this.prepare('DELETE FROM plan_task_links WHERE plan_id=? AND step_key=?').run(id,link.stepKey);
       }
-      this.db.prepare('INSERT OR IGNORE INTO plan_revisions VALUES(?,?,?)').run(id,plan.revision,JSON.stringify(plan));
+      this.prepare('INSERT OR IGNORE INTO plan_revisions VALUES(?,?,?)').run(id,plan.revision,JSON.stringify(plan));
       plan.revision++; plan.proposal=proposal; plan.baseHead=baseHead; plan.fingerprint=fingerprint; plan.contentHash=hash({goal:this.goal(plan.goalId),proposal,baseHead,fingerprint}); delete plan.approval;
       plan.status=proposal.questions.length?'needs_clarification':'awaiting_approval'; this.writePlan(plan); return plan;
     });
@@ -168,7 +291,7 @@ export class Store {
       const usage=this.execution(p).tasks[taskId]!;if(usage.rounds>=planBudget(p).maxRounds)throw new Error('Round budget exhausted');
       usage.feedback=feedback;usage.stopReason='verification';
       const previous=this.workspace(taskId);
-      this.db.prepare('UPDATE workspaces SET data=? WHERE task_id=?').run(JSON.stringify(workspace),taskId);
+      this.prepare('UPDATE workspaces SET data=? WHERE task_id=?').run(JSON.stringify(workspace),taskId);
       this.event('task.repair',null,taskId,null,{feedback,previousWorkspace:previous,workspace});
       this.queuePlanTask(p,this.planLinks(p.id).find(l=>l.taskId===taskId)!.stepKey,taskId);this.writePlan(p);
     });
@@ -194,19 +317,19 @@ export class Store {
     const step=p.proposal!.steps.find(s=>s.key===stepKey)!, worker=p.approval!.workers.find(w=>w.workerRef===step.workerRef)!;
     const task=this.show(taskId),resumeReview=task.status==='submitted';
     if(task.status!=='queued' && !resumeReview) {
-      this.db.prepare("UPDATE tasks SET status='queued',updated_at=? WHERE id=?").run(new Date().toISOString(),taskId);
+      this.prepare("UPDATE tasks SET status='queued',updated_at=? WHERE id=?").run(new Date().toISOString(),taskId);
       this.event('task.transitioned',task.created_by,taskId,null,{from:task.status,to:'queued',note:'Approved retry; preserve feedback and workspace'});
     }
     const key=`${p.id}:${p.revision}:${stepKey}:${this.dispatches().filter(d=>d.taskId===taskId).length}`;
     const input={taskId,adapter:worker.adapter,profile:worker.profile,executionId:p.id,requestKey:key,isolated:true,resumeReview,enqueue:true,scope:step.scope,check:step.check,...planBudget(p)};
     const dispatch:Dispatch={key,taskId,route:'workflow',input,state:'waiting',note:'Approved plan; waiting for scheduler',fingerprint:hash(input)};
-    this.db.prepare('INSERT INTO dispatches VALUES(?,?,?,?)').run(key,taskId,dispatch.state,JSON.stringify(dispatch));
+    this.prepare('INSERT INTO dispatches VALUES(?,?,?,?)').run(key,taskId,dispatch.state,JSON.stringify(dispatch));
   }
-  plannerLog(id: string,data: unknown) { this.db.prepare('INSERT INTO planner_logs(plan_id,data,created_at) VALUES(?,?,?)').run(id,JSON.stringify(data),new Date().toISOString()); }
-  planHistory(id: string) { return this.db.prepare('SELECT data FROM plan_revisions WHERE plan_id=? ORDER BY revision').all(id).map(r=>JSON.parse(String(r['data'])) as Plan); }
-  planLogs(id: string) { return this.db.prepare('SELECT id,data,created_at FROM planner_logs WHERE plan_id=? ORDER BY id').all(id).map(r=>({...r,data:JSON.parse(String(r['data'])) as unknown})); }
-  planLinks(id: string) { return this.db.prepare('SELECT step_key AS stepKey,task_id AS taskId FROM plan_task_links WHERE plan_id=? ORDER BY rowid').all(id).map(r=>({stepKey:String(r['stepKey']),taskId:String(r['taskId'])})); }
-  taskPlan(taskId: string) { const row=this.db.prepare('SELECT plan_id FROM plan_task_links WHERE task_id=?').get(taskId); return row?this.plan(String(row['plan_id'])):undefined; }
+  plannerLog(id: string,data: unknown) { this.prepare('INSERT INTO planner_logs(plan_id,data,created_at) VALUES(?,?,?)').run(id,JSON.stringify(data),new Date().toISOString()); }
+  planHistory(id: string) { return this.prepare('SELECT data FROM plan_revisions WHERE plan_id=? ORDER BY revision').all(id).map(r=>JSON.parse(String(r['data'])) as Plan); }
+  planLogs(id: string) { return this.prepare('SELECT id,data,created_at FROM planner_logs WHERE plan_id=? ORDER BY id').all(id).map(r=>({...r,data:JSON.parse(String(r['data'])) as unknown})); }
+  planLinks(id: string) { return this.prepare('SELECT step_key AS stepKey,task_id AS taskId FROM plan_task_links WHERE plan_id=? ORDER BY rowid').all(id).map(r=>({stepKey:String(r['stepKey']),taskId:String(r['taskId'])})); }
+  taskPlan(taskId: string) { const row=this.prepare('SELECT plan_id FROM plan_task_links WHERE task_id=?').get(taskId); return row?this.plan(String(row['plan_id'])):undefined; }
   approvePlan(id: string,input: unknown,baseHead: string,fingerprint: string,bindings: Record<string,string> = {}) {
     const approval=approvalSchema.parse(input);
     return this.transaction(()=>{ const p=this.plan(id);
@@ -218,11 +341,11 @@ export class Store {
       if(approval.maxWorkers>p.proposal.maxWorkers || approval.maxWorkers>this.goal(p.goalId).maxWorkers) throw new Error('Approval exceeds plan/goal limit');
       p.approval=approval; p.bindings=bindings; p.executionSnapshot={baseHead,fingerprint}; p.status='materializing';
       this.execution(p);
-      this.db.prepare('INSERT INTO plan_approvals VALUES(?,?,?,?,?)').run(id,p.revision,p.contentHash,JSON.stringify(approval),new Date().toISOString());
-      const manager='manager-'+id; this.db.prepare('INSERT OR IGNORE INTO agents VALUES(?,?,?)').run(manager,'manager',p.createdAt);
+      this.prepare('INSERT INTO plan_approvals VALUES(?,?,?,?,?)').run(id,p.revision,p.contentHash,JSON.stringify(approval),new Date().toISOString());
+      const manager='manager-'+id; this.prepare('INSERT OR IGNORE INTO agents VALUES(?,?,?)').run(manager,'manager',p.createdAt);
       const retained=new Map(this.planLinks(id).map(l=>[l.stepKey,l.taskId]));
       const ids=new Map(p.proposal.steps.map(s=>[s.key,retained.get(s.key)??randomUUID()]));
-      for(const w of approval.workers) this.db.prepare('INSERT OR IGNORE INTO agents VALUES(?,?,?)').run(id+'-'+w.workerRef,'worker',p.createdAt);
+      for(const w of approval.workers) this.prepare('INSERT OR IGNORE INTO agents VALUES(?,?,?)').run(id+'-'+w.workerRef,'worker',p.createdAt);
       for(const s of p.proposal.steps) {
         if(retained.has(s.key)) {
           const taskId=retained.get(s.key)!;
@@ -230,13 +353,13 @@ export class Store {
           continue;
         }
         const taskId=ids.get(s.key)!, worker=approval.workers.find(w=>w.workerRef===s.workerRef)!;
-        this.db.prepare('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?)').run(taskId,s.title,[s.requirements,'Deliverable: '+s.deliverable,'Acceptance:\n'+s.acceptance.join('\n')].join('\n'),manager,id+'-'+s.workerRef,'queued',p.createdAt,p.createdAt);
-        this.db.prepare('INSERT INTO plan_task_links VALUES(?,?,?)').run(id,s.key,taskId);
+        this.prepare('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?)').run(taskId,s.title,[s.requirements,'Deliverable: '+s.deliverable,'Acceptance:\n'+s.acceptance.join('\n')].join('\n'),manager,id+'-'+s.workerRef,'queued',p.createdAt,p.createdAt);
+        this.prepare('INSERT INTO plan_task_links VALUES(?,?,?)').run(id,s.key,taskId);
         p.execution!.tasks[taskId]={rounds:0,retries:0};
         this.queuePlanTask(p,s.key,taskId);
       }
-      for(const taskId of ids.values())this.db.prepare('DELETE FROM dependencies WHERE task_id=?').run(taskId);
-      for(const s of p.proposal.steps) for(const d of s.dependencies) this.db.prepare('INSERT OR IGNORE INTO dependencies VALUES(?,?)').run(ids.get(s.key)!,ids.get(d)!);
+      for(const taskId of ids.values())this.prepare('DELETE FROM dependencies WHERE task_id=?').run(taskId);
+      for(const s of p.proposal.steps) for(const d of s.dependencies) this.prepare('INSERT OR IGNORE INTO dependencies VALUES(?,?)').run(ids.get(s.key)!,ids.get(d)!);
       p.status='executing'; delete p.note;delete p.stopReason;this.writePlan(p); return p;
     });
   }
@@ -295,10 +418,10 @@ export class Store {
     });
   }
   findRun(key: string) {
-    return this.db.prepare("SELECT * FROM runs WHERE request_key=?").get(key);
+    return this.prepare("SELECT * FROM runs WHERE request_key=?").get(key);
   }
   runs() {
-    return this.db.prepare("SELECT * FROM runs ORDER BY rowid").all();
+    return this.prepare("SELECT * FROM runs ORDER BY rowid").all();
   }
   reserveRun(key: string, fingerprint: string, taskId: string, owner: string) {
     return this.transaction(() => {
@@ -416,14 +539,23 @@ export class Store {
     });
   }
   private transaction<T>(fn: () => T): T {
+    if (this.inTransaction) {
+      return fn();
+    }
+    this.flush();
+    this.inTransaction = true;
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const result = fn();
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {}
       throw error;
+    } finally {
+      this.inTransaction = false;
     }
   }
   private event(
@@ -448,7 +580,7 @@ export class Store {
       );
   }
   private agent(id: string) {
-    const agent = this.db.prepare("SELECT * FROM agents WHERE id=?").get(id);
+    const agent = this.prepare("SELECT * FROM agents WHERE id=?").get(id);
     if (!agent) throw new Error(`Unknown agent: ${id}`);
     return agent;
   }
@@ -530,7 +662,7 @@ export class Store {
       ? this.db
           .prepare("SELECT * FROM tasks WHERE status=? ORDER BY created_at,id")
           .all(statusSchema.parse(status))
-      : this.db.prepare("SELECT * FROM tasks ORDER BY created_at,id").all();
+      : this.prepare("SELECT * FROM tasks ORDER BY created_at,id").all();
   }
   transition(
     id: string,
@@ -613,6 +745,7 @@ export class Store {
     });
   }
   observation() {
+    this.flush();
     return this.transaction(() => ({
       ...this.status(),
       tasks: this.list().map((task) => ({
@@ -657,6 +790,7 @@ export class Store {
     });
   }
   eventPage(after = 0, limit = 100, taskId?: string) {
+    this.flush();
     if (
       !Number.isSafeInteger(after) ||
       after < 0 ||
@@ -682,11 +816,10 @@ export class Store {
     };
   }
   events(after = 0) {
+    this.flush();
     if (!Number.isSafeInteger(after) || after < 0)
       throw new Error("Invalid event cursor");
-    return this.db
-      .prepare("SELECT * FROM events WHERE id>? ORDER BY id")
-      .all(after);
+    return this.prepare("SELECT * FROM events WHERE id>? ORDER BY id").all(after);
   }
   recordReviewEvent(
     taskId: string,
@@ -694,17 +827,16 @@ export class Store {
     actor: string,
     data: unknown,
   ) {
-    this.transaction(() => {
-      if (this.task(taskId).created_by !== actor)
-        throw new Error("Reviewer mismatch");
-      if (
-        !this.db
-          .prepare("SELECT id FROM attempts WHERE id=? AND task_id=?")
-          .get(attemptId, taskId)
+    if (this.task(taskId).created_by !== actor)
+      throw new Error("Reviewer mismatch");
+    if (
+      !this.prepare("SELECT id FROM attempts WHERE id=? AND task_id=?").get(
+        attemptId,
+        taskId,
       )
-        throw new Error("Review attempt mismatch");
-      this.event("review.output", actor, taskId, attemptId, data);
-    });
+    )
+      throw new Error("Review attempt mismatch");
+    this.queueEvent("review.output", actor, taskId, attemptId, data);
   }
   recordWorkerEvent(
     taskId: string,
@@ -712,27 +844,24 @@ export class Store {
     actor: string,
     data: unknown,
   ) {
-    this.transaction(() => {
-      const attempt = this.db
-        .prepare("SELECT * FROM attempts WHERE id=? AND task_id=? AND owner=?")
-        .get(attemptId, taskId, actor);
-      if (!attempt) throw new Error("Worker attempt mismatch");
-      this.event("worker.output", actor, taskId, attemptId, data);
-    });
+    const attempt = this.prepare(
+      "SELECT * FROM attempts WHERE id=? AND task_id=? AND owner=?",
+    ).get(attemptId, taskId, actor);
+    if (!attempt) throw new Error("Worker attempt mismatch");
+    this.queueEvent("worker.output", actor, taskId, attemptId, data);
   }
   status() {
+    this.flush();
     return {
       projectId: this.projectId,
       schemaVersion: 4,
-      agents: this.db.prepare("SELECT * FROM agents ORDER BY id").all(),
-      tasks: this.db
-        .prepare(
-          "SELECT status,count(*) AS count FROM tasks GROUP BY status ORDER BY status",
-        )
-        .all(),
-      lastEventId: this.db
-        .prepare("SELECT coalesce(max(id),0) AS id FROM events")
-        .get()!["id"],
+      agents: this.prepare("SELECT * FROM agents ORDER BY id").all(),
+      tasks: this.prepare(
+        "SELECT status,count(*) AS count FROM tasks GROUP BY status ORDER BY status",
+      ).all(),
+      lastEventId: this.prepare("SELECT coalesce(max(id),0) AS id FROM events").get()![
+        "id"
+      ],
     };
   }
 }
