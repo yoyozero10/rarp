@@ -24,3 +24,60 @@ const actionLabels: Record<PlanAction, string> = { reject: "Từ chối", pause:
 /** A plan waiting for permission resumes with a label that names the cause. */
 export const planActionLabel = (action: PlanAction, status: string) =>
   action === "resume" && status === "waiting_permission" ? "Đã cấp quyền, tiếp tục" : actionLabels[action];
+
+/**
+ * Trích xuất lệnh bị chặn từ note hoặc thông báo từ chối quyền của Antigravity/worker.
+ * Hỗ trợ các mẫu:
+ * - "Antigravity tool permissions denied: command(node -e ...)\nAdd an allow rule..."
+ * - "command(node -e ...)"
+ * - "Antigravity tool permissions denied: npm test"
+ * - "denied_actions: [command(foo)]"
+ */
+export function parsePermissionDenial(note?: string | null): string | null {
+  if (!note || typeof note !== "string") return null;
+
+  // Khớp mẫu command(...)
+  const cmdMatch = note.match(/\bcommand\(([\s\S]+?)\)(?:[\r\n,]|Add an allow rule|$)/i) ?? note.match(/\bcommand\(([^)\r\n]+)\)/i);
+  const matched = cmdMatch?.[1];
+  if (matched !== undefined) {
+    const trimmed = matched.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+
+  // Khớp tiền tố permissions denied hoặc denied_actions
+  const prefixMatch = note.match(/(?:permissions denied|denied_actions)[:\s]+([^\r\n,]+)/i);
+  const prefixVal = prefixMatch?.[1];
+  if (prefixVal !== undefined) {
+    let candidate = prefixVal.trim();
+    const inner = candidate.match(/\bcommand\((.+?)\)/i);
+    const innerMatch = inner?.[1];
+    if (innerMatch !== undefined) candidate = innerMatch.trim();
+    candidate = candidate.replace(/^['"\[]+|['"\]]+$/g, "").trim();
+    if (candidate.length > 0 && !candidate.toLowerCase().includes("antigravity tool")) return candidate;
+  }
+
+  return null;
+}
+
+/**
+ * Sinh chuỗi JSON snippet cấu hình ~/.gemini/antigravity-cli/settings.json
+ * cho permissions.allow dựa trên target command đã cho.
+ */
+export function generateAntigravityAllowSnippet(target: string): string {
+  const trimmed = (target ?? "").trim();
+  const rule = trimmed.length === 0
+    ? "command(*)"
+    : trimmed.startsWith("command(") && trimmed.endsWith(")")
+      ? trimmed
+      : `command(${trimmed})`;
+
+  return JSON.stringify(
+    {
+      permissions: {
+        allow: [rule],
+      },
+    },
+    null,
+    2,
+  );
+}
