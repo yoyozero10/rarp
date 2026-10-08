@@ -1,6 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planLabel, planEditable, planActions, planActionLabel, planCanIntegrate, planRemaining } from "../dist/core/planview.js";
+import {
+  planLabel,
+  planEditable,
+  planActions,
+  planActionLabel,
+  planCanIntegrate,
+  planRemaining,
+  parsePermissionDenial,
+  generateAntigravityAllowSnippet,
+} from "../dist/core/planview.js";
 
 test("plan status labels fall back to the raw status", () => {
   assert.equal(planLabel("waiting_permission"), "Chờ cấp quyền");
@@ -42,4 +51,50 @@ test("accepted tasks can be integrated while the plan waits for permission", () 
 test("remaining budget never goes negative", () => {
   assert.equal(planRemaining(1, 3), 2);
   assert.equal(planRemaining(5, 3), 0);
+});
+
+test("parsePermissionDenial extracts blocked command from note", () => {
+  const standardNote =
+    "Antigravity tool permissions denied: command(node -e ...)\nAdd an allow rule to permissions.allow in ~/.gemini/antigravity-cli/settings.json, trust the workspace, or approve a revision with antigravityFullAccess.";
+  assert.equal(parsePermissionDenial(standardNote), "node -e ...");
+
+  assert.equal(
+    parsePermissionDenial("Antigravity tool permissions denied: command(git status)"),
+    "git status",
+  );
+  assert.equal(parsePermissionDenial("command(npm test)"), "npm test");
+  assert.equal(
+    parsePermissionDenial("Antigravity tool permissions denied: npm run build"),
+    "npm run build",
+  );
+  assert.equal(parsePermissionDenial("regular runtime failure: timeout"), null);
+  assert.equal(parsePermissionDenial(""), null);
+  assert.equal(parsePermissionDenial(null), null);
+  assert.equal(parsePermissionDenial(undefined), null);
+});
+
+test("generateAntigravityAllowSnippet produces valid settings.json JSON snippet", () => {
+  const snippet = generateAntigravityAllowSnippet("node -e ...");
+  const parsed = JSON.parse(snippet);
+  assert.deepEqual(parsed, {
+    permissions: {
+      allow: ["command(node -e ...)"],
+    },
+  });
+
+  const snippetFromCommand = generateAntigravityAllowSnippet("command(git status)");
+  const parsedFromCommand = JSON.parse(snippetFromCommand);
+  assert.deepEqual(parsedFromCommand, {
+    permissions: {
+      allow: ["command(git status)"],
+    },
+  });
+
+  const wildcardSnippet = generateAntigravityAllowSnippet("");
+  const parsedWildcard = JSON.parse(wildcardSnippet);
+  assert.deepEqual(parsedWildcard, {
+    permissions: {
+      allow: ["command(*)"],
+    },
+  });
 });
