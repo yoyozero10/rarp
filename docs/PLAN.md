@@ -1,0 +1,72 @@
+# Kế hoạch triển khai Rarp
+
+Ngày lập: 2026-10-21. Mục tiêu: một trưởng nhóm điều phối 2–4 worker khác loại, duy trì vòng giao việc–nghiệm thu–sửa, có thể khôi phục và trực quan hóa sau này.
+
+## Phạm vi và thứ tự
+
+Windows trước; CLI trước UI; Codex adapter đầu tiên rồi Antigravity. Manager độc lập nhà cung cấp, có thể là agent ngoài gọi CLI. Manager do runtime quản lý cần adapter hỗ trợ resume/wakeup rõ ràng.
+
+Một repo `rarp` chứa CLI, runtime, adapter, storage, tài liệu và UI tương lai. Không cần repo riêng cho mỗi agent. Remote GitHub đề xuất private cho đến khi quyết định phát hành.
+
+## M0 — Nền dự án
+
+- Khởi tạo Git, TypeScript strict, CLI help/version, lockfile, tài liệu kiến trúc và kế hoạch.
+- Giữ bài thử cũ làm dữ liệu tham khảo, không commit logs/credentials.
+- Đạt khi cài sạch, typecheck, build và CLI help/about chạy được.
+
+## M1 — Task và lưu trữ
+
+- Xác định schema SQLite: projects, agents, tasks, attempts, reviews, events; migration có version.
+- Cài các lệnh init, task create/list/show, status --json.
+- State machine kiểm tra chuyển trạng thái, dependency và quyền nghiệm thu.
+- Đạt khi restart vẫn giữ task; cập nhật và event nguyên tử; chuyển sai bị từ chối; dependency lỗi không tự chạy.
+
+## M2 — Runtime và một worker thật
+
+- Runtime start/status/stop; khóa tránh hai runtime cùng dự án.
+- Adapter Codex: start, structured events, kết thúc lượt, lỗi, timeout, cancellation.
+- Phân biệt starting/ready/working/waiting_input/waiting_permission/idle/exited/failed.
+- Đạt khi một task thật hoàn thành, log được gắn attempt và stop không để lại cây tiến trình do Rarp tạo.
+
+## M3 — Vòng nghiệm thu và nhiều loại agent
+
+- Adapter Antigravity; manager nhận sự kiện submitted và trả accepted/changes_requested với feedback.
+- Runtime chờ sự kiện và kích hoạt lượt tiếp; giới hạn số lần sửa, thời gian và retry.
+- Đạt khi manager giao worker tạo giỏ hàng, nghiệm thu, giao giảm giá; chạy thêm tình huống cố ý sai để chứng minh vòng sửa. Hai loại CLI hoàn tất, dừng sạch, không cần nhắc tiếp trong bài thử có giới hạn.
+- Đây là mốc MVP chức năng. Các bài thử JSON chưa đủ chứng minh sửa feature thật.
+
+## M4 — Sửa code và phục hồi
+
+- Worktree cho worker, phạm vi file, kết quả gồm commit/diff và bằng chứng test.
+- Manager tích hợp tuần tự, xử lý conflict và test trên kết quả chung.
+- Lease, idempotency, restart reconciliation, khôi phục event chưa xử lý.
+- Đạt khi ngắt worker/runtime giữa task và khôi phục có kiểm soát; không lặp thao tác hoàn tất; sửa một feature nhỏ bằng hai worker và review đạt.
+
+## M5 — UI quan sát
+
+- API snapshot và event stream, auth local, reconnect cursor, phân trang log.
+- Dashboard React: agent list, task board, graph dependencies, timeline và diff/test evidence.
+- Thêm thao tác cancel/reassign/approve với trạng thái pending/succeeded/failed.
+- Đạt khi reload/reconnect không mất hoặc nhân đôi sự kiện; UI phản ánh đúng database; đóng UI không làm runtime dừng.
+
+## Nhánh mở rộng — Model API qua 9router
+
+- Hai endpoint đã qua smoke test kết nối trong chat; cần test riêng tool calling, streaming, lỗi và khả năng tương thích trước khi dùng làm worker.
+- Adapter API cần tool loop đọc/sửa file/chạy lệnh với kiểm soát workspace, giới hạn lượt và ghi sự kiện. Một lần chat completion chưa tạo thành coding agent.
+- Ưu tiên sau M3, trừ khi chọn API làm manager sớm; khi đó thực hiện spike tool-calling trước M2.
+
+## Kiểm chứng và tiêu chí phát hành
+
+- Unit tests tập trung vào state machine, lease, idempotency và transaction.
+- Integration tests dùng subprocess giả lập để tái hiện crash, timeout, fragmented output, duplicate events và stop.
+- Live smoke tests chạy riêng, có giới hạn chi phí/thời gian; lưu kết quả đã loại bỏ secrets.
+- CI: npm ci, typecheck, build; thêm test khi module có hành vi. Thử Windows trước, mở rộng OS sau.
+- Release MVP chỉ khi M1–M3 đạt; công bố rõ phục hồi/worktree/UI còn ở mốc sau.
+
+## Việc tiếp theo
+
+1. Tạo remote GitHub private và push khi có công cụ xác thực khả dụng.
+2. Chốt schema và triển khai M1.
+3. Kiểm tra giao thức output của các CLI đang cài trước khi triển khai M2.
+
+Không cam kết lịch theo ngày trước spike M2: độ ổn định adapter và vòng đời tiến trình Windows là hai yếu tố chưa được đo đủ.
