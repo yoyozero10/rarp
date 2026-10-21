@@ -6,7 +6,7 @@ Ngày lập: 2026-10-21. Mục tiêu: một trưởng nhóm điều phối 2–4
 
 Windows trước; CLI trước UI; Codex adapter đầu tiên rồi Antigravity. Manager độc lập nhà cung cấp, có thể là agent ngoài gọi CLI. Manager do runtime quản lý cần adapter hỗ trợ resume/wakeup rõ ràng.
 
-Một repo `rarp` chứa CLI, runtime, adapter, storage, tài liệu và UI tương lai. Không cần repo riêng cho mỗi agent. Remote GitHub đề xuất private cho đến khi quyết định phát hành.
+Một repo `rarp` chứa CLI, runtime, adapter, storage, tài liệu và UI tương lai. Không cần repo riêng cho mỗi agent. Remote GitHub đã public theo yêu cầu: https://github.com/yoyozero10/rarp.
 
 ## M0 — Nền dự án
 
@@ -15,6 +15,8 @@ Một repo `rarp` chứa CLI, runtime, adapter, storage, tài liệu và UI tư�
 - Đạt khi cài sạch, typecheck, build và CLI help/about chạy được.
 
 ## M1 — Task và lưu trữ
+
+Trạng thái: đã triển khai và kiểm thử local. CLI chuyển trạng thái thủ công để kiểm chứng workflow; chạy worker tự động thuộc M2–M3.
 
 - Xác định schema SQLite: projects, agents, tasks, attempts, reviews, events; migration có version.
 - Cài các lệnh init, task create/list/show, status --json.
@@ -65,8 +67,8 @@ Một repo `rarp` chứa CLI, runtime, adapter, storage, tài liệu và UI tư�
 
 ## Việc tiếp theo
 
-1. Tạo remote GitHub private và push khi có công cụ xác thực khả dụng.
-2. Chốt schema và triển khai M1.
-3. Kiểm tra giao thức output của các CLI đang cài trước khi triển khai M2.
+1. Kiểm tra giao thức output của các CLI đang cài trước khi triển khai M2.
+2. Xây runtime single-owner và adapter Codex.
+3. Kiểm chứng timeout, cancellation và dừng toàn bộ cây tiến trình Windows.
 
 Không cam kết lịch theo ngày trước spike M2: độ ổn định adapter và vòng đời tiến trình Windows là hai yếu tố chưa được đo đủ.

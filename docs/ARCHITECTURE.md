@@ -13,7 +13,7 @@ CLI / UI tương lai -> API local -> Runtime -> Agent adapters -> Agent CLI
 
 - Core độc lập với CLI, UI và nhà cung cấp model.
 - Runtime là tiến trình riêng; đóng màn hình theo dõi không dừng đội.
-- CLI dùng Commander; validation dùng Zod; SQLite driver sẽ được chọn qua thử nghiệm tương thích và đóng gói Windows ở M1.
+- CLI dùng Commander; validation dùng Zod; M1 dùng `node:sqlite` sau smoke test trên Windows/Node 26. Migration version 1 dùng PRAGMA user_version; từ chối schema tương lai. SQLite bật foreign keys, WAL và busy timeout 5 giây; transaction ghi dùng BEGIN IMMEDIATE.
 - MVP dùng subprocess với output có cấu trúc. PTY bổ sung theo nhu cầu từng CLI.
 - Một runtime sở hữu database của một dự án. API local bind loopback, xác thực bằng token phiên; không mở ra mạng mặc định.
 - Mỗi sự kiện có id tăng dần, schemaVersion, timestamp, type, projectId; agentId/taskId/attemptId/correlationId khi liên quan. UI reconnect từ cursor; snapshot và event stream phải có ranh giới nhất quán.
