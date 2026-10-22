@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { Store } from "../storage/store.js";
+import { fork } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+import { runtimeRequest } from "../runtime/server.js";
 const program = new Command()
   .name("rarp")
   .description("Local multi-agent task coordination")
@@ -33,7 +37,7 @@ program
   .command("about")
   .action(() =>
     console.log(
-      "Rarp Phase 1: persistent tasks and review workflow. Runtime is not implemented yet.",
+      "Rarp Phase 2: persistent tasks, local runtime and a Codex worker. Automated review is planned for Phase 3.",
     ),
   );
 program
@@ -82,8 +86,93 @@ task
     (id: string, status: string, options: { actor: string; note: string }) =>
       run((s) => s.transition(id, status, options.actor, options.note)),
   );
+const runtime = program
+  .command("runtime")
+  .description("Control the local runtime");
+runtime
+  .command("start")
+  .option(
+    "--codex <executable>",
+    "Codex executable (not a shell command)",
+    "codex",
+  )
+  .action(async (options: { codex: string }) => {
+    const root = resolve(program.opts()["project"] as string);
+    const child = fork(
+      fileURLToPath(new URL("../runtime/daemon.js", import.meta.url)),
+      [root, options.codex],
+      {
+        detached: true,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+        execArgv: [],
+      },
+    );
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error("Runtime startup timeout"));
+      }, 15000);
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        reject(new Error(`Runtime exited during startup: ${code}`));
+      });
+      child.once("message", (message: { ready?: boolean; error?: string }) => {
+        clearTimeout(timer);
+        if (message.error) reject(new Error(message.error));
+        else resolve();
+        child.unref();
+      });
+    });
+    console.log(JSON.stringify(await runtimeRequest(root, "status")));
+  });
+runtime
+  .command("status")
+  .action(async () =>
+    console.log(
+      JSON.stringify(
+        await runtimeRequest(program.opts()["project"] as string, "status"),
+      ),
+    ),
+  );
+runtime
+  .command("stop")
+  .action(async () =>
+    console.log(
+      JSON.stringify(
+        await runtimeRequest(program.opts()["project"] as string, "stop", {}),
+      ),
+    ),
+  );
+program
+  .command("worker")
+  .command("run <taskId>")
+  .option("--timeout-ms <ms>", "Maximum execution time", "120000")
+  .action(async (taskId: string, options: { timeoutMs: string }) =>
+    console.log(
+      JSON.stringify(
+        await runtimeRequest(program.opts()["project"] as string, "run", {
+          taskId,
+          timeoutMs: Number(options.timeoutMs),
+        }),
+      ),
+    ),
+  );
+runtime
+  .command("cancel")
+  .action(async () =>
+    console.log(
+      JSON.stringify(
+        await runtimeRequest(program.opts()["project"] as string, "cancel", {}),
+      ),
+    ),
+  );
 try {
-  program.parse();
+  await program.parseAsync();
 } catch (error) {
   console.error(
     JSON.stringify({

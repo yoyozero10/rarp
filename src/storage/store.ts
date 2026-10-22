@@ -263,6 +263,20 @@ export class Store {
   events() {
     return this.db.prepare("SELECT * FROM events ORDER BY id").all();
   }
+  recordWorkerEvent(
+    taskId: string,
+    attemptId: string,
+    actor: string,
+    data: unknown,
+  ) {
+    this.transaction(() => {
+      const attempt = this.db
+        .prepare("SELECT * FROM attempts WHERE id=? AND task_id=? AND owner=?")
+        .get(attemptId, taskId, actor);
+      if (!attempt) throw new Error("Worker attempt mismatch");
+      this.event("worker.output", actor, taskId, attemptId, data);
+    });
+  }
   status() {
     return {
       projectId: this.projectId,
