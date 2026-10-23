@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "decision": { "type": "string", "enum": ["accepted", "changes_requested"] },
+    "feedback": { "type": "string" },
+    "evidence": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["decision", "feedback", "evidence"],
+  "additionalProperties": false
+}

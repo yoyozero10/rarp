@@ -2,6 +2,7 @@ import { fork, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { CodexStream } from "../adapters/codex.js";
+import { AntigravityStream } from "../adapters/antigravity.js";
 import type { CommandSpec } from "../adapters/codex.js";
 
 const exec = promisify(execFile);
@@ -36,7 +37,10 @@ export function runWorker(
     resolveResult = resolve;
     rejectResult = reject;
   });
-  const parser = new CodexStream(event);
+  const parser =
+    command.protocol === "antigravity"
+      ? new AntigravityStream(event)
+      : new CodexStream(event);
   async function finish(reason: string, code?: number | null) {
     if (finishing) return;
     finishing = true;
@@ -73,7 +77,8 @@ export function runWorker(
         reason,
         note: success
           ? parser.result
-          : `Worker ${reason}; exit=${code ?? "unknown"}; completed=${parser.completed}`,
+          : parser.failureReason ||
+            `Worker ${reason}; exit=${code ?? "unknown"}; completed=${parser.completed}`,
       });
     } catch (error) {
       rejectResult(new Error(`Worker cleanup failed: ${String(error)}`));

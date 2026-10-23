@@ -25,7 +25,7 @@ export const transitions: Record<TaskStatus, readonly TaskStatus[]> = {
   queued: ["running", "blocked", "cancelled"],
   running: ["submitted", "blocked", "failed", "cancelled"],
   submitted: ["reviewing", "cancelled"],
-  reviewing: ["accepted", "changes_requested", "cancelled"],
+  reviewing: ["accepted", "changes_requested", "failed", "cancelled"],
   changes_requested: ["queued", "cancelled"],
   blocked: ["queued", "cancelled"],
   failed: ["queued", "cancelled"],

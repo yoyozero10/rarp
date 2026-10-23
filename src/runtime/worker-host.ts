@@ -6,7 +6,10 @@ const keepAlive = setInterval(() => {}, 1000);
 process.once(
   "message",
   (message: { command: CommandSpec; root: string; prompt: string }) => {
-    const child = spawn(message.command.file, message.command.args, {
+    const args = message.command.promptArgument
+      ? [...message.command.args, message.prompt]
+      : message.command.args;
+    const child = spawn(message.command.file, args, {
       cwd: message.root,
       windowsHide: true,
       shell: false,
@@ -25,7 +28,7 @@ process.once(
     );
     child.on("exit", (code) => send({ type: "exit", code }));
     child.on("close", (code) => send({ type: "close", code }));
-    child.stdin.end(message.prompt);
+    child.stdin.end(message.command.promptArgument ? "" : message.prompt);
   },
 );
 process.on("disconnect", () => {

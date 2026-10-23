@@ -1,9 +1,11 @@
 import { startRuntime } from "./server.js";
 import { codexCommand } from "../adapters/codex.js";
+import { antigravityCommand } from "../adapters/antigravity.js";
 try {
   const runtime = await startRuntime(
     process.argv[2]!,
     codexCommand(process.argv[3] ?? "codex"),
+    { antigravity: antigravityCommand(process.argv[4] ?? "agy") },
   );
   process.send?.({ ready: true });
   process.disconnect?.();
