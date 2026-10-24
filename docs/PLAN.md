@@ -68,6 +68,15 @@ Trạng thái 2026-10-24: đã triển khai maxWorkers/maxReviewers, queue bền
 - UI hiển thị workers[], queue, slot, stage/PID và lý do chờ; active cũ chỉ là workflow đầu tiên.
 - Đạt khi 4 worker chạy độc lập đồng thời, cancel một task không dừng task khác, dependency chờ integration và kết quả chung qua test.
 
+## M7 — Planner và phê duyệt trước thực thi
+
+Trạng thái: đã lên kế hoạch, chưa triển khai. Chi tiết: [PHASE7-PLAN.md](PHASE7-PLAN.md).
+
+- Nhận mục tiêu, phân tích read-only, đề xuất đầu việc/dependency/scope và số worker có giải thích.
+- Người dùng xem/sửa, chọn Codex hoặc Antigravity cho từng worker, duyệt revision/hash trước khi tạo worker thực thi.
+- Materialize idempotent, chạy qua scheduler Phase 6, review/integration theo chính sách đã duyệt; thay đổi scope hoặc kế hoạch cần duyệt lại.
+- Thứ tự: contract/storage → planner → approval UI/CLI/API → executor → fixture/live/CI.
+
 ## Nhánh mở rộng — Model API qua 9router
 
 - Hai endpoint đã qua smoke test kết nối trong chat; cần test riêng tool calling, streaming, lỗi và khả năng tương thích trước khi dùng làm worker.
@@ -84,7 +93,8 @@ Trạng thái 2026-10-24: đã triển khai maxWorkers/maxReviewers, queue bền
 
 ## Việc tiếp theo
 
-1. Sau M6: benchmark tải/log và tài khoản thực tế trước khi nâng capacity trên 4.
+1. M7: planner, lựa chọn CLI và approval gate theo docs/PHASE7-PLAN.md.
+2. Benchmark tải/log và tài khoản thực tế trước khi nâng capacity trên 4.
 2. Trước tác vụ dài không giám sát: containment tiến trình Windows mạnh hơn và mở rộng kiểm chứng crash recovery.
 3. Bổ sung giao thức waiting_input/waiting_permission khi có adapter tương tác.
 
