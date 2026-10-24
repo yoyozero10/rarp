@@ -321,11 +321,19 @@ export class Store {
           .all(statusSchema.parse(status))
       : this.db.prepare("SELECT * FROM tasks ORDER BY created_at,id").all();
   }
-  transition(id: string, nextInput: string, actor: string, noteInput: string) {
+  transition(
+    id: string,
+    nextInput: string,
+    actor: string,
+    noteInput: string,
+    expectedStatus?: string,
+  ) {
     const next = statusSchema.parse(nextInput);
     const note = textSchema.parse(noteInput);
     return this.transaction(() => {
       const task = this.task(id);
+      if (expectedStatus !== undefined && task.status !== expectedStatus)
+        throw new Error("Task changed; refresh before retrying");
       const agent = this.agent(actor);
       if (!transitions[task.status].includes(next))
         throw new Error(`Invalid transition: ${task.status} -> ${next}`);
@@ -392,6 +400,75 @@ export class Store {
       );
       return this.show(id);
     });
+  }
+  observation() {
+    return this.transaction(() => ({
+      ...this.status(),
+      tasks: this.list().map((task) => ({
+        ...this.show(String(task["id"])),
+        workspace: this.workspace(String(task["id"])) ?? null,
+      })),
+      recentEvents: this.db
+        .prepare(
+          "SELECT * FROM (SELECT * FROM events ORDER BY id DESC LIMIT 100) ORDER BY id",
+        )
+        .all(),
+    }));
+  }
+  reassign(
+    id: string,
+    actor: string,
+    assignee: string,
+    expectedStatus?: string,
+  ) {
+    return this.transaction(() => {
+      const task = this.task(id);
+      if (expectedStatus !== undefined && task.status !== expectedStatus)
+        throw new Error("Task changed; refresh before retrying");
+      if (actor !== task.created_by || this.agent(actor)["role"] !== "manager")
+        throw new Error("Only the task manager can reassign");
+      if (
+        !["queued", "failed", "blocked", "changes_requested"].includes(
+          task.status,
+        )
+      )
+        throw new Error("Task cannot be reassigned in this state");
+      if (this.agent(assignee)["role"] !== "worker")
+        throw new Error("Assignee must be a worker");
+      this.db
+        .prepare("UPDATE tasks SET assigned_to=?,updated_at=? WHERE id=?")
+        .run(assignee, new Date().toISOString(), id);
+      this.event("task.reassigned", actor, id, null, {
+        from: task.assigned_to,
+        to: assignee,
+      });
+      return this.show(id);
+    });
+  }
+  eventPage(after = 0, limit = 100, taskId?: string) {
+    if (
+      !Number.isSafeInteger(after) ||
+      after < 0 ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 200
+    )
+      throw new Error("Invalid event cursor or limit");
+    const rows = taskId
+      ? this.db
+          .prepare(
+            "SELECT * FROM events WHERE id>? AND task_id=? ORDER BY id LIMIT ?",
+          )
+          .all(after, taskId, limit + 1)
+      : this.db
+          .prepare("SELECT * FROM events WHERE id>? ORDER BY id LIMIT ?")
+          .all(after, limit + 1);
+    const events = rows.slice(0, limit);
+    return {
+      events,
+      nextCursor: Number(events.at(-1)?.["id"] ?? after),
+      hasMore: rows.length > limit,
+    };
   }
   events(after = 0) {
     if (!Number.isSafeInteger(after) || after < 0)

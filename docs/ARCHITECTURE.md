@@ -30,6 +30,6 @@ Tham khảo thiết kế và test hành vi của https://github.com/mco-org/squa
 
 REA là công cụ điều tra tùy chọn, không phải dependency bắt buộc của runtime.
 
-## UI tương lai
+## UI local — Phase 5
 
-React cho dashboard; React Flow cho đồ thị task. Snapshot API + event stream hỗ trợ board, timeline, log và reconnect. Chọn SSE hoặc WebSocket tại M5 theo nhu cầu tương tác; lệnh điều khiển dùng API có xác nhận kết quả. Hiển thị trạng thái quan sát được, không suy diễn suy nghĩ nội bộ của model.
+React/Vite build vào dist/ui và phục vụ từ runtime tại /ui/. Snapshot đọc trong cùng transaction với cursor; SSE replay từ cursor/Last-Event-ID, polling SQLite 500 ms để thấy thay đổi CLI ngoài runtime. Client hợp nhất theo event ID, debounce refresh snapshot và giữ cursor khi reconnect. Token fragment được chuyển sang sessionStorage; mọi API dùng Authorization header, kiểm tra host/origin loopback và không bật CORS. Đóng tab không dừng runtime; stop chủ động đóng stream. Điều khiển task dùng state machine; reassign và transition kiểm tra expectedStatus trong transaction. Dependency hiện là danh sách cạnh có thể chọn; canvas React Flow là mở rộng. Hiển thị trạng thái quan sát được, không suy diễn suy nghĩ nội bộ của model.

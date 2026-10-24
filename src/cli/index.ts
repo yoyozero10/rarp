@@ -4,6 +4,7 @@ import { Store } from "../storage/store.js";
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import { runtimeRequest } from "../runtime/server.js";
 import { recoverRuntime } from "../runtime/recovery.js";
 const program = new Command()
@@ -41,9 +42,22 @@ program
   .command("about")
   .action(() =>
     console.log(
-      "Rarp Phase 4: isolated worktrees, verified integration and controlled recovery.",
+      "Rarp Phase 5: local dashboard, event replay and task controls.",
     ),
   );
+program
+  .command("ui")
+  .description("Print the local dashboard URL (start runtime first)")
+  .action(() => {
+    const meta = JSON.parse(
+      readFileSync(
+        resolve(program.opts()["project"] as string, ".rarp", "runtime.json"),
+        "utf8",
+      ),
+    ) as { port: number; token: string };
+    if (!Number.isInteger(meta.port)) throw new Error("Runtime not ready");
+    console.log(`http://127.0.0.1:${meta.port}/ui/#token=${meta.token}`);
+  });
 program
   .command("agent")
   .command("register <id>")
