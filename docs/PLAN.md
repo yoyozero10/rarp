@@ -70,7 +70,7 @@ Trạng thái 2026-10-24: đã triển khai maxWorkers/maxReviewers, queue bền
 
 ## M7 — Planner và phê duyệt trước thực thi
 
-Trạng thái: đã triển khai; chưa đóng nghiệm thu vì Antigravity thật từ chối quyền công cụ trong bài mixed CLI. Chi tiết: [PHASE7-PLAN.md](PHASE7-PLAN.md) và [báo cáo nghiệm thu](PHASE7-VALIDATION.md).
+Trạng thái: đã đóng nghiệm thu 2026-10-25; 59/59 tests, CI Windows/Linux và live Codex đơn/hỗn hợp đạt. Ngoại lệ quyền Antigravity chỉ áp dụng bài test đã được người dùng duyệt. Chi tiết: [PHASE7-PLAN.md](PHASE7-PLAN.md) và [báo cáo nghiệm thu](PHASE7-VALIDATION.md).
 
 - Nhận mục tiêu, phân tích read-only, đề xuất đầu việc/dependency/scope và số worker có giải thích.
 - Người dùng xem/sửa, chọn Codex hoặc Antigravity cho từng worker, duyệt revision/hash trước khi tạo worker thực thi.
@@ -93,7 +93,7 @@ Trạng thái: đã triển khai; chưa đóng nghiệm thu vì Antigravity th�
 
 ## Việc tiếp theo
 
-1. Hoàn tất M7.5: cấu hình quyền Antigravity phù hợp rồi chạy lại live hỗn hợp hai CLI; chỉ đóng M7 khi chu trình đến integration đạt. Xem [kiểm chứng Phase 7](PHASE7-VALIDATION.md).
+1. M7 đã đóng. Khi dùng Antigravity thường xuyên, cấu hình quyền công cụ phù hợp; runtime giữ nguyên approval gate và không tự bỏ duyệt. Xem [kiểm chứng Phase 7](PHASE7-VALIDATION.md).
 2. Benchmark tải/log và tài khoản thực tế trước khi nâng capacity trên 4.
 3. Trước tác vụ dài không giám sát: containment tiến trình Windows mạnh hơn và mở rộng kiểm chứng crash recovery.
 4. Bổ sung giao thức waiting_input/waiting_permission khi có adapter tương tác.
