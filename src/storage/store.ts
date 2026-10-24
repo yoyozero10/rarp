@@ -11,6 +11,7 @@ import {
   transitions,
 } from "../core/task.js";
 import type { Task } from "../core/task.js";
+import type { Workspace } from "../runtime/workspace.js";
 
 const migration = `
 CREATE TABLE projects(id TEXT PRIMARY KEY, root TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -45,12 +46,19 @@ export class Store {
         const version = this.db.prepare("PRAGMA user_version").get()![
           "user_version"
         ];
-        if (version !== 0 && version !== 1)
+        if (version !== 0 && version !== 1 && version !== 2)
           throw new Error(`Unsupported database version: ${version}`);
         if (version === 0) {
           if (!initialize) throw new Error("Database not initialized.");
           this.db.exec(migration);
         }
+        if (version !== 2)
+          this.db.exec(`
+          CREATE TABLE workspaces(task_id TEXT PRIMARY KEY REFERENCES tasks(id), data TEXT NOT NULL);
+          CREATE TABLE runs(id TEXT PRIMARY KEY, request_key TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id), owner TEXT NOT NULL, runtime_pid INTEGER NOT NULL, host_pid INTEGER, lease_until INTEGER NOT NULL, state TEXT NOT NULL, result TEXT);
+          CREATE UNIQUE INDEX active_task_run ON runs(task_id) WHERE state='active';
+          PRAGMA user_version=2;
+        `);
         const project = this.db
           .prepare("SELECT id FROM projects LIMIT 1")
           .get();
@@ -71,6 +79,130 @@ export class Store {
   }
   close() {
     this.db.close();
+  }
+  workspace(taskId: string): Workspace | undefined {
+    const row = this.db
+      .prepare("SELECT data FROM workspaces WHERE task_id=?")
+      .get(taskId);
+    return row ? (JSON.parse(String(row["data"])) as Workspace) : undefined;
+  }
+  saveWorkspace(workspace: Workspace) {
+    this.transaction(() => {
+      this.db
+        .prepare(
+          "INSERT INTO workspaces VALUES(?,?) ON CONFLICT(task_id) DO UPDATE SET data=excluded.data",
+        )
+        .run(workspace.taskId, JSON.stringify(workspace));
+      this.event("workspace.updated", null, workspace.taskId, null, workspace);
+    });
+  }
+  findRun(key: string) {
+    return this.db.prepare("SELECT * FROM runs WHERE request_key=?").get(key);
+  }
+  runs() {
+    return this.db.prepare("SELECT * FROM runs ORDER BY rowid").all();
+  }
+  reserveRun(key: string, fingerprint: string, taskId: string, owner: string) {
+    return this.transaction(() => {
+      const id = randomUUID();
+      this.db
+        .prepare(
+          "INSERT INTO runs(id,request_key,fingerprint,task_id,owner,runtime_pid,lease_until,state) VALUES(?,?,?,?,?,?,?,'active')",
+        )
+        .run(
+          id,
+          key,
+          fingerprint,
+          taskId,
+          owner,
+          process.pid,
+          Date.now() + 15000,
+        );
+      this.event("run.started", null, taskId, null, { id, key });
+      return id;
+    });
+  }
+  hostRun(id: string, pid: number) {
+    this.db
+      .prepare("UPDATE runs SET host_pid=? WHERE id=? AND state='active'")
+      .run(pid, id);
+  }
+  heartbeat(owner: string) {
+    this.db
+      .prepare("UPDATE runs SET lease_until=? WHERE owner=? AND state='active'")
+      .run(Date.now() + 15000, owner);
+  }
+  finishRun(id: string, result: unknown) {
+    this.transaction(() => {
+      const row = this.db
+        .prepare("SELECT task_id FROM runs WHERE id=?")
+        .get(id);
+      if (!row) throw new Error("Run missing");
+      this.db
+        .prepare(
+          "UPDATE runs SET state='completed',result=?,host_pid=NULL WHERE id=?",
+        )
+        .run(JSON.stringify(result), id);
+      this.event("run.completed", null, String(row["task_id"]), null, {
+        id,
+        result,
+      });
+    });
+  }
+  recoverRuns() {
+    const alive = (pid: unknown) => {
+      if (!pid) return false;
+      try {
+        process.kill(Number(pid), 0);
+        return true;
+      } catch (e) {
+        return (e as NodeJS.ErrnoException).code !== "ESRCH";
+      }
+    };
+    return this.transaction(() => {
+      const rows = this.db
+        .prepare("SELECT * FROM runs WHERE state='active'")
+        .all();
+      for (const row of rows)
+        if (
+          alive(row["runtime_pid"]) ||
+          alive(row["host_pid"]) ||
+          Number(row["lease_until"]) > Date.now()
+        )
+          throw new Error("Live process or unexpired lease; recovery refused");
+      for (const row of rows) {
+        const task = this.task(String(row["task_id"]));
+        const now = new Date().toISOString();
+        if (task.status === "running") {
+          this.db
+            .prepare(
+              "UPDATE attempts SET ended_at=?,outcome='interrupted',summary='Runtime interrupted; inspect workspace before retry' WHERE task_id=? AND ended_at IS NULL",
+            )
+            .run(now, task.id);
+          this.db
+            .prepare("UPDATE tasks SET status='failed',updated_at=? WHERE id=?")
+            .run(now, task.id);
+        }
+        if (task.status === "reviewing")
+          this.db
+            .prepare(
+              "UPDATE tasks SET status='submitted',updated_at=? WHERE id=?",
+            )
+            .run(now, task.id);
+        this.db
+          .prepare("UPDATE runs SET state='recovered',result=? WHERE id=?")
+          .run(
+            JSON.stringify({ state: this.task(task.id).status }),
+            String(row["id"]),
+          );
+        this.event("run.recovered", null, task.id, null, {
+          id: row["id"],
+          from: task.status,
+          to: this.task(task.id).status,
+        });
+      }
+      return rows.map((row) => row["id"]);
+    });
   }
   private transaction<T>(fn: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
@@ -261,8 +393,12 @@ export class Store {
       return this.show(id);
     });
   }
-  events() {
-    return this.db.prepare("SELECT * FROM events ORDER BY id").all();
+  events(after = 0) {
+    if (!Number.isSafeInteger(after) || after < 0)
+      throw new Error("Invalid event cursor");
+    return this.db
+      .prepare("SELECT * FROM events WHERE id>? ORDER BY id")
+      .all(after);
   }
   recordReviewEvent(
     taskId: string,
@@ -299,7 +435,7 @@ export class Store {
   status() {
     return {
       projectId: this.projectId,
-      schemaVersion: 1,
+      schemaVersion: 2,
       agents: this.db.prepare("SELECT * FROM agents ORDER BY id").all(),
       tasks: this.db
         .prepare(

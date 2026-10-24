@@ -1,5 +1,11 @@
 import { createServer } from "node:http";
-import { writeFileSync, readFileSync, unlinkSync, realpathSync } from "node:fs";
+import {
+  writeFileSync,
+  readFileSync,
+  unlinkSync,
+  realpathSync,
+  existsSync,
+} from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
@@ -9,6 +15,7 @@ import type { CommandSpec } from "../adapters/codex.js";
 import { runWorker } from "./process.js";
 import { antigravityCommand } from "../adapters/antigravity.js";
 import { runWorkflow } from "./workflow.js";
+import { prepareWorkspace, integrateWorkspace } from "./workspace.js";
 
 export async function startRuntime(
   rootInput: string,
@@ -16,7 +23,13 @@ export async function startRuntime(
   adapters: { antigravity?: CommandSpec; manager?: CommandSpec } = {},
 ) {
   const root = realpathSync(rootInput);
+  if (existsSync(join(root, ".rarp", "recovery.lock")))
+    throw new Error("Recovery in progress");
   const store = new Store(root);
+  if (store.runs().some((row) => row["state"] === "active")) {
+    store.close();
+    throw new Error("Unfinished runs exist; recover before starting runtime");
+  }
   const lock = join(root, ".rarp", "runtime.json");
   const token = randomBytes(32).toString("hex");
   try {
@@ -31,6 +44,12 @@ export async function startRuntime(
       "Runtime lock exists. Check runtime status; stale locks require manual inspection before removal.",
     );
   }
+  // Close the startup/recovery race after acquiring the exclusive runtime lock.
+  if (existsSync(join(root, ".rarp", "recovery.lock"))) {
+    store.close();
+    unlinkSync(lock);
+    throw new Error("Recovery in progress");
+  }
   let active:
     | {
         taskId: string;
@@ -38,7 +57,12 @@ export async function startRuntime(
         worker: {
           pid: number | undefined;
           cancel: () => Promise<unknown>;
-          snapshot?: () => {attemptId:string;stage:string;round:number;pid:number|undefined};
+          snapshot?: () => {
+            attemptId: string;
+            stage: string;
+            round: number;
+            pid: number | undefined;
+          };
         };
         settled: Promise<void>;
       }
@@ -47,6 +71,15 @@ export async function startRuntime(
   let stopping = false;
   let closed = false;
   let cleanupError: unknown;
+  const owner = randomBytes(16).toString("hex");
+  const heartbeat = setInterval(() => {
+    try {
+      store.heartbeat(owner);
+    } catch (error) {
+      cleanupError = error;
+      stopping = true;
+    }
+  }, 2000);
   const snapshot = () => ({
     pid: process.pid,
     state: stopping ? "stopping" : active ? "working" : "ready",
@@ -72,6 +105,7 @@ export async function startRuntime(
       server.close((error) => (error ? reject(error) : resolve())),
     );
     store.close();
+    clearInterval(heartbeat);
     unlinkSync(lock);
     closed = true;
   }
@@ -115,7 +149,11 @@ export async function startRuntime(
         reply(snapshot());
         return;
       }
-      if (req.url !== "/run" && req.url !== "/workflow") {
+      if (
+        req.url !== "/run" &&
+        req.url !== "/workflow" &&
+        req.url !== "/integrate"
+      ) {
         reply({ error: "Unknown route" }, 404);
         return;
       }
@@ -124,12 +162,31 @@ export async function startRuntime(
         body += String(chunk);
         if (body.length > 4096) throw new Error("Request too large");
       }
+      if (req.url === "/integrate") {
+        if (stopping || active) throw new Error("Runtime busy or stopping");
+        const { taskId } = z
+          .object({ taskId: z.string().min(1) })
+          .parse(JSON.parse(body));
+        if (store.show(taskId).status !== "accepted")
+          throw new Error("Task must be accepted before integration");
+        const workspace = store.workspace(taskId);
+        if (!workspace) throw new Error("Task has no isolated workspace");
+        workspace.integrated = integrateWorkspace(root, workspace);
+        store.saveWorkspace(workspace);
+        reply(workspace);
+        return;
+      }
       const input = z
         .object({
           taskId: z.string().min(1),
           timeoutMs: z.number().int().min(100).max(3600000).default(120000),
           adapter: z.enum(["codex", "antigravity"]).default("codex"),
           maxRounds: z.number().int().min(1).max(10).default(3),
+          requestKey: z.string().min(1).max(128).optional(),
+          isolated: z.boolean().default(false),
+          resumeReview: z.boolean().default(false),
+          scope: z.array(z.string()).default([]),
+          check: z.array(z.string()).default([]),
           totalTimeoutMs: z
             .number()
             .int()
@@ -138,14 +195,66 @@ export async function startRuntime(
             .default(600000),
         })
         .parse(JSON.parse(body));
+      const key = input.requestKey ?? randomBytes(16).toString("hex");
+      const fingerprint = JSON.stringify({
+        route: req.url,
+        ...input,
+        requestKey: undefined,
+      });
+      const existing = store.findRun(key);
+      if (existing) {
+        if (existing["fingerprint"] !== fingerprint)
+          throw new Error("Request key reused with different input");
+        reply({ duplicate: true, run: existing });
+        return;
+      }
       if (stopping || active) throw new Error("Runtime busy or stopping");
       const task = store.show(input.taskId);
-      const running = store.transition(
-        task.id,
-        "running",
-        task.assigned_to,
-        "Dispatched by runtime",
-      );
+      if ((input.isolated || input.resumeReview) && req.url !== "/workflow")
+        throw new Error("Isolation and resume-review require workflow");
+      if (input.resumeReview && task.status !== "submitted")
+        throw new Error("Resume review requires a submitted task");
+      if (!input.resumeReview && task.status !== "queued")
+        throw new Error("Task must be queued");
+      let workspace = store.workspace(task.id);
+      if (workspace && !input.isolated)
+        throw new Error("Task has an isolated workspace; use isolated mode");
+      if (
+        workspace &&
+        ((input.scope.length &&
+          JSON.stringify(input.scope) !== JSON.stringify(workspace.scope)) ||
+          (input.check.length &&
+            JSON.stringify(input.check) !== JSON.stringify(workspace.check)))
+      )
+        throw new Error(
+          "Existing workspace scope/check are immutable; omit them or reuse original values",
+        );
+      if (input.isolated)
+        for (const id of task.dependencies) {
+          const dependency = store.workspace(String(id));
+          if (dependency && !dependency.integrated)
+            throw new Error("Integrate isolated dependencies before dispatch");
+        }
+      if (input.isolated && !workspace) {
+        workspace = prepareWorkspace(root, task.id, input.scope, input.check);
+        store.saveWorkspace(workspace);
+      }
+      const executionRoot = workspace?.path ?? root;
+      const runId = store.reserveRun(key, fingerprint, task.id, owner);
+      let running;
+      try {
+        running = input.resumeReview
+          ? store.show(task.id)
+          : store.transition(
+              task.id,
+              "running",
+              task.assigned_to,
+              "Dispatched by runtime",
+            );
+      } catch (error) {
+        store.finishRun(runId, { error: String(error) });
+        throw error;
+      }
       const attemptId = String(running.attempts.at(-1)!["id"]);
       const selected =
         input.adapter === "antigravity"
@@ -154,16 +263,21 @@ export async function startRuntime(
       if (req.url === "/workflow") {
         const worker = runWorkflow(
           store,
-          root,
+          executionRoot,
           task.id,
           selected,
           adapters.manager ?? codexReviewCommand(command.file),
-          input,
+          {
+            ...input,
+            ...(workspace ? { workspace } : {}),
+            onSpawn: (pid: number) => store.hostRun(runId, pid),
+          },
           attemptId,
         );
         const settled = worker.done
           .then((result) => {
             last = result;
+            store.finishRun(runId, result);
           })
           .catch((error) => {
             cleanupError = error;
@@ -180,11 +294,12 @@ export async function startRuntime(
       const prompt = `You are a bounded Rarp worker. Work only in this project. Do not launch other agents or change .rarp state. Complete the task and report results; manager reviews separately.\nTitle: ${task.title}\n${task.body}`;
       const worker = runWorker(
         selected,
-        root,
+        executionRoot,
         prompt,
         input.timeoutMs,
         (data) =>
           store.recordWorkerEvent(task.id, attemptId, task.assigned_to, data),
+        (pid) => store.hostRun(runId, pid),
       );
       const settled = worker.done
         .then((result) => {
@@ -205,6 +320,7 @@ export async function startRuntime(
             ...result,
             state: result.success ? "exited" : "failed",
           };
+          store.finishRun(runId, last);
         })
         .catch((error) => {
           cleanupError = error;
@@ -240,6 +356,7 @@ export async function startRuntime(
     );
   } catch (error) {
     store.close();
+    clearInterval(heartbeat);
     unlinkSync(lock);
     throw error;
   }

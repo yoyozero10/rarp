@@ -5,6 +5,7 @@ import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { runtimeRequest } from "../runtime/server.js";
+import { recoverRuntime } from "../runtime/recovery.js";
 const program = new Command()
   .name("rarp")
   .description("Local multi-agent task coordination")
@@ -32,12 +33,15 @@ program
 program
   .command("events")
   .description("Show persisted events")
-  .action(() => run((s) => s.events()));
+  .option("--after <id>", "Replay events after cursor", "0")
+  .action((options: { after: string }) =>
+    run((s) => s.events(Number(options.after))),
+  );
 program
   .command("about")
   .action(() =>
     console.log(
-      "Rarp Phase 3: Codex/Antigravity workers and bounded automatic review workflows.",
+      "Rarp Phase 4: isolated worktrees, verified integration and controlled recovery.",
     ),
   );
 program
@@ -89,6 +93,26 @@ task
 const runtime = program
   .command("runtime")
   .description("Control the local runtime");
+runtime
+  .command("recover")
+  .action(() =>
+    console.log(
+      JSON.stringify(recoverRuntime(program.opts()["project"] as string)),
+    ),
+  );
+runtime.command("runs").action(() => run((s) => s.runs()));
+task
+  .command("workspace <id>")
+  .action((id: string) => run((s) => s.workspace(id) ?? null));
+task.command("integrate <id>").action(async (id: string) =>
+  console.log(
+    JSON.stringify(
+      await runtimeRequest(program.opts()["project"] as string, "integrate", {
+        taskId: id,
+      }),
+    ),
+  ),
+);
 runtime
   .command("start")
   .option(
@@ -154,14 +178,19 @@ program
   .command("run <taskId>")
   .option("--timeout-ms <ms>", "Maximum execution time", "120000")
   .option("--adapter <name>", "codex or antigravity", "codex")
+  .option("--request-key <key>", "Persistent idempotency key")
   .action(
-    async (taskId: string, options: { timeoutMs: string; adapter: string }) =>
+    async (
+      taskId: string,
+      options: { timeoutMs: string; adapter: string; requestKey?: string },
+    ) =>
       console.log(
         JSON.stringify(
           await runtimeRequest(program.opts()["project"] as string, "run", {
             taskId,
             timeoutMs: Number(options.timeoutMs),
             adapter: options.adapter,
+            requestKey: options.requestKey,
           }),
         ),
       ),
@@ -182,6 +211,15 @@ program
   .option("--max-rounds <n>", "Maximum worker/review rounds", "3")
   .option("--timeout-ms <ms>", "Timeout per agent invocation", "120000")
   .option("--total-timeout-ms <ms>", "Overall workflow deadline", "600000")
+  .option("--request-key <key>", "Persistent idempotency key")
+  .option("--isolated", "Run in a task Git worktree")
+  .option("--resume-review", "Review an existing submitted result")
+  .option(
+    "--scope <paths...>",
+    "Allowed repository-relative files/directories",
+    [],
+  )
+  .option("--check-json <argv>", "Verification command as JSON argv", "[]")
   .action(
     async (
       taskId: string,
@@ -190,6 +228,11 @@ program
         maxRounds: string;
         timeoutMs: string;
         totalTimeoutMs: string;
+        requestKey?: string;
+        isolated?: boolean;
+        resumeReview?: boolean;
+        scope: string[];
+        checkJson: string;
       },
     ) =>
       console.log(
@@ -203,6 +246,11 @@ program
               maxRounds: Number(options.maxRounds),
               timeoutMs: Number(options.timeoutMs),
               totalTimeoutMs: Number(options.totalTimeoutMs),
+              requestKey: options.requestKey,
+              isolated: options.isolated,
+              resumeReview: options.resumeReview,
+              scope: options.scope,
+              check: JSON.parse(options.checkJson),
             },
           ),
         ),

@@ -17,6 +17,7 @@ export function runWorker(
   prompt: string,
   timeoutMs: number,
   event: (data: Record<string, unknown>) => void,
+  onSpawn?: (pid: number) => void,
 ) {
   const host = fork(
     fileURLToPath(new URL("./worker-host.js", import.meta.url)),
@@ -120,7 +121,12 @@ export function runWorker(
       }
     },
   );
-  host.send({ command, root, prompt });
+  try {
+    if (host.pid) onSpawn?.(host.pid);
+    host.send({ command, root, prompt });
+  } catch {
+    void finish("tracking-error");
+  }
   return {
     pid: host.pid,
     done,

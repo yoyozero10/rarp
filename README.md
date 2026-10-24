@@ -4,7 +4,7 @@ CLI điều phối nhiều AI agent trên máy local: lập kế hoạch, giao v
 
 ## Trạng thái
 
-Phase 3: SQLite, task/dependency, attempt, review, events, runtime local, worker Codex/Antigravity và vòng review–sửa tự động có giới hạn. Chưa có UI, worktree isolation hoặc crash recovery.
+Phase 4 bổ sung Git worktree riêng cho worker, kiểm tra scope, commit/test evidence, tích hợp tuần tự và recovery có lease/idempotency. Giữ các chức năng Phase 3: SQLite, task/dependency, review và worker Codex/Antigravity. Chưa có UI. Kiểm thử live Phase 4 hiện bị chặn bởi hạn mức Codex; không coi fixture là nghiệm thu model thật.
 
 ## Phát triển
 
@@ -60,6 +60,37 @@ SQLite dùng `node:sqlite` có sẵn trong Node, không cần native npm addon. 
 npm run typecheck
 npm test
 ```
+
+## Phase 4: worktree và phục hồi có kiểm soát
+
+Workflow có thể chạy trong Git worktree riêng; checkout chính phải sạch, `.rarp/` phải được bỏ qua bởi Git. Scope là danh sách file/thư mục tương đối với repo, không phải sandbox bảo mật. Lệnh kiểm tra chạy bằng executable và argv, không qua shell.
+
+```powershell
+node dist/cli/index.js workflow run TASK_ID --isolated --scope src --check-json '["node","--test"]' --request-key feature-v1
+node dist/cli/index.js task integrate TASK_ID
+node dist/cli/index.js events --after 0
+```
+
+Worker tạo commit, chạy check, manager review. Chỉ task `accepted` mới được tích hợp. Runtime merge trong worktree tích hợp, chạy lại check trên kết quả chung, rồi fast-forward checkout chính. Conflict hoặc check lỗi giữ nguyên checkout chính; sửa và commit conflict trong worktree tích hợp được báo lỗi, sau đó gọi lại `task integrate`.
+
+Sau crash, không tự chạy lại worker:
+
+```powershell
+node dist/cli/index.js runtime recover
+node dist/cli/index.js runtime start
+node dist/cli/index.js workflow run TASK_ID --isolated --resume-review --request-key review-v2
+```
+
+Recovery chỉ cho phép khi runtime/host không còn sống và lease 15 giây đã hết. Task đang chạy thành `failed`, file sửa được giữ; manager phải kiểm tra rồi chuyển `queued` và dùng request key mới nếu muốn retry. Review gián đoạn trở về `submitted`, có thể dùng `--resume-review`; task đã accepted không review lại. Cùng request key và cùng nội dung trả run cũ, không tạo attempt mới. Scope/check của workspace đã tạo không được thay đổi. Event có cursor `--after` để đọc tiếp; không có consumer tự replay side effect.
+
+Kiểm thử hai worker sửa feature và tích hợp tuần tự, không dùng tài khoản AI:
+
+```powershell
+npm run build
+node scripts/smoke-phase4.mjs --fixture
+```
+
+Bỏ `--fixture` để dùng Codex thật, có tiêu thụ hạn mức tài khoản. Fixture reviewer không thay thế nghiệm thu bằng model thật. Chưa bảo đảm containment tiến trình cố ý tách cây, tự tiếp tục phiên model, hay tự giải quyết conflict. Worktree được giữ để kiểm tra thủ công.
 
 ## Phase 2: chạy worker Codex
 

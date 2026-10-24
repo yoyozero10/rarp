@@ -43,6 +43,8 @@ Triển khai 2026-10-24: adapter Antigravity, workflow run, Codex reviewer read-
 
 ## M4 — Sửa code và phục hồi
 
+Trạng thái 2026-10-24: đã có worktree theo task, scope, checkpoint commit, check trước review và sau merge, tích hợp idempotent, durable request key, lease/heartbeat và recovery tường minh. Test bao gồm crash thật, giữ file sửa, review tiếp không lặp worker và xử lý conflict trong worktree riêng. Smoke hai worker có chế độ fixture; live Codex đang bị chặn bởi usage limit, nên tiêu chí nghiệm thu hai worker/model thật chưa được xác nhận. Event cursor hỗ trợ đọc tiếp, chưa có tự replay side effect hay resume phiên model.
+
 - Worktree cho worker, phạm vi file, kết quả gồm commit/diff và bằng chứng test.
 - Manager tích hợp tuần tự, xử lý conflict và test trên kết quả chung.
 - Lease, idempotency, restart reconciliation, khôi phục event chưa xử lý.
@@ -71,8 +73,8 @@ Triển khai 2026-10-24: adapter Antigravity, workflow run, Codex reviewer read-
 
 ## Việc tiếp theo
 
-1. M4: worktree cho worker, tích hợp và kiểm tra code thật.
-2. Trước tác vụ dài không giám sát: containment tiến trình Windows và crash reconciliation.
+1. M4: chạy lại smoke hai worker/model thật khi hạn mức Codex được khôi phục.
+2. Trước tác vụ dài không giám sát: containment tiến trình Windows mạnh hơn và mở rộng kiểm chứng crash recovery.
 3. Bổ sung giao thức waiting_input/waiting_permission khi có adapter tương tác.
 
 Không cam kết lịch theo ngày trước spike M2: độ ổn định adapter và vòng đời tiến trình Windows là hai yếu tố chưa được đo đủ.
