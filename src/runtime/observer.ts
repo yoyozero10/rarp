@@ -51,7 +51,7 @@ export function observer(store: Store, runtime: () => unknown) {
       if (req.method !== "GET") return false;
       const reply = (data: unknown) => res.end(JSON.stringify(data));
       if (url.pathname === "/snapshot") {
-        reply({ ...store.observation(), runtime: runtime() });
+        reply({ ...store.observation(), goals: store.goals(), plans: store.plans(), runtime: runtime() });
         return true;
       }
       if (url.pathname === "/events") {

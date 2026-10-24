@@ -1,6 +1,6 @@
 # Phase 7 — Nhận mục tiêu, lập kế hoạch và duyệt trước khi chạy
 
-Trạng thái: kế hoạch thiết kế, chưa triển khai. Kế thừa scheduler/worktree/reviewer của Phase 6.
+Trạng thái: đã triển khai, đang nghiệm thu; chưa đóng Phase 7. Typecheck/build, bộ test và UI fixture đạt; Codex thật có luồng hoàn tất. Live hỗn hợp bị chặn vì Antigravity từ chối quyền công cụ. Xem [báo cáo kiểm chứng](PHASE7-VALIDATION.md).
 
 ## Luồng người dùng
 

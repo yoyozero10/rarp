@@ -1,4 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
+import { goalSchema, approvalSchema, validateProposal, hash } from "../core/plan.js";
+import type { Goal, Plan, Approval } from "../core/plan.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -47,7 +49,7 @@ export class Store {
         const version = this.db.prepare("PRAGMA user_version").get()![
           "user_version"
         ];
-        if (version !== 0 && version !== 1 && version !== 2 && version !== 3)
+        if (![0, 1, 2, 3, 4].includes(Number(version)))
           throw new Error(`Unsupported database version: ${version}`);
         if (version === 0) {
           if (!initialize) throw new Error("Database not initialized.");
@@ -65,6 +67,15 @@ export class Store {
           CREATE TABLE dispatches(request_key TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), state TEXT NOT NULL, data TEXT NOT NULL);
           CREATE UNIQUE INDEX pending_dispatch ON dispatches(task_id) WHERE state IN ('waiting','active');
           PRAGMA user_version=3;
+        `);
+        if (Number(version) < 4) this.db.exec(`
+          CREATE TABLE goals(id TEXT PRIMARY KEY, data TEXT NOT NULL);
+          CREATE TABLE plans(id TEXT PRIMARY KEY, goal_id TEXT NOT NULL REFERENCES goals(id), data TEXT NOT NULL);
+          CREATE TABLE plan_revisions(plan_id TEXT NOT NULL REFERENCES plans(id), revision INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(plan_id,revision));
+          CREATE TABLE plan_approvals(plan_id TEXT NOT NULL REFERENCES plans(id), revision INTEGER NOT NULL, content_hash TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(plan_id,revision));
+          CREATE TABLE plan_task_links(plan_id TEXT NOT NULL REFERENCES plans(id), step_key TEXT NOT NULL, task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id), PRIMARY KEY(plan_id,step_key));
+          CREATE TABLE planner_logs(id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id TEXT NOT NULL REFERENCES plans(id), data TEXT NOT NULL, created_at TEXT NOT NULL);
+          PRAGMA user_version=4;
         `);
         const project = this.db
           .prepare("SELECT id FROM projects LIMIT 1")
@@ -86,6 +97,72 @@ export class Store {
   }
   close() {
     this.db.close();
+  }
+  goals(): Goal[] { return this.db.prepare("SELECT data FROM goals ORDER BY rowid").all().map(r=>JSON.parse(String(r['data'])) as Goal); }
+  goal(id: string) { const value=this.goals().find(g=>g.id===id); if(!value) throw new Error('Unknown goal'); return value; }
+  plans(): Plan[] { return this.db.prepare("SELECT data FROM plans ORDER BY rowid").all().map(r=>JSON.parse(String(r['data'])) as Plan); }
+  plan(id: string): Plan { const row=this.db.prepare('SELECT data FROM plans WHERE id=?').get(id); if(!row) throw new Error('Unknown plan'); return JSON.parse(String(row['data'])) as Plan; }
+  private writePlan(plan: Plan) {
+    this.db.prepare('UPDATE plans SET data=? WHERE id=?').run(JSON.stringify(plan),plan.id);
+    this.db.prepare('UPDATE goals SET data=json_set(data,\'$.status\',?) WHERE id=?').run(plan.status,plan.goalId);
+    this.event('plan.updated',null,null,null,{planId:plan.id,status:plan.status,revision:plan.revision});
+  }
+  createGoal(input: unknown) {
+    const goal: Goal={...goalSchema.parse(input),id:'goal-'+randomUUID(),status:'received',createdAt:new Date().toISOString()};
+    const plan: Plan={id:'plan-'+randomUUID(),goalId:goal.id,revision:0,contentHash:'',baseHead:'',fingerprint:'',status:'received',proposal:null,createdAt:goal.createdAt};
+    this.transaction(()=>{ this.db.prepare('INSERT INTO goals VALUES(?,?)').run(goal.id,JSON.stringify(goal)); this.db.prepare('INSERT INTO plans VALUES(?,?,?)').run(plan.id,goal.id,JSON.stringify(plan)); this.event('goal.created',null,null,null,{goalId:goal.id,planId:plan.id}); });
+    return {goal,plan};
+  }
+  updatePlan(id: string, revision: number, input: unknown, baseHead: string, fingerprint: string) {
+    const proposal=validateProposal(input);
+    return this.transaction(()=>{ const plan=this.plan(id); if(plan.revision!==revision) throw new Error('Plan revision changed'); if(['executing','materializing','completed','cancelled'].includes(plan.status)) throw new Error('Execution must not be edited; create a new goal');
+      const links=this.planLinks(id);
+      if(links.some(l=>this.dispatches().some(d=>d.taskId===l.taskId && d.state==='active'))) throw new Error('Cancel active work before revising');
+      for(const link of links) {
+        const task=this.show(link.taskId), old=plan.proposal?.steps.find(s=>s.key===link.stepKey), next=proposal.steps.find(s=>s.key===link.stepKey);
+        if(task.status==='accepted') { if(!this.workspace(task.id)?.integrated || hash(old)!==hash(next)) throw new Error('Completed steps must remain unchanged and integrated'); }
+        else { for(const d of this.dispatches().filter(d=>d.taskId===task.id && d.state==='waiting')) {d.state='cancelled';d.note='Superseded revision';this.db.prepare('UPDATE dispatches SET state=?,data=? WHERE request_key=?').run(d.state,JSON.stringify(d),d.key);} this.db.prepare('DELETE FROM plan_task_links WHERE plan_id=? AND step_key=?').run(id,link.stepKey); }
+      }
+      this.db.prepare('INSERT OR IGNORE INTO plan_revisions VALUES(?,?,?)').run(id,plan.revision,JSON.stringify(plan));
+      plan.revision++; plan.proposal=proposal; plan.baseHead=baseHead; plan.fingerprint=fingerprint; plan.contentHash=hash({goal:this.goal(plan.goalId),proposal,baseHead,fingerprint}); delete plan.approval;
+      plan.status=proposal.questions.length?'needs_clarification':'awaiting_approval'; this.writePlan(plan); return plan;
+    });
+  }
+  planSnapshot(id: string,snapshot: {baseHead:string;fingerprint:string}) { this.transaction(()=>{const p=this.plan(id);p.executionSnapshot=snapshot;this.writePlan(p);}); }
+  planState(id: string,status: string,note?: string) { return this.transaction(()=>{ const p=this.plan(id); p.status=status; if(note!==undefined)p.note=note; this.writePlan(p); return p; }); }
+  plannerLog(id: string,data: unknown) { this.db.prepare('INSERT INTO planner_logs(plan_id,data,created_at) VALUES(?,?,?)').run(id,JSON.stringify(data),new Date().toISOString()); }
+  planHistory(id: string) { return this.db.prepare('SELECT data FROM plan_revisions WHERE plan_id=? ORDER BY revision').all(id).map(r=>JSON.parse(String(r['data'])) as Plan); }
+  planLogs(id: string) { return this.db.prepare('SELECT id,data,created_at FROM planner_logs WHERE plan_id=? ORDER BY id').all(id).map(r=>({...r,data:JSON.parse(String(r['data'])) as unknown})); }
+  planLinks(id: string) { return this.db.prepare('SELECT step_key AS stepKey,task_id AS taskId FROM plan_task_links WHERE plan_id=? ORDER BY rowid').all(id).map(r=>({stepKey:String(r['stepKey']),taskId:String(r['taskId'])})); }
+  taskPlan(taskId: string) { const row=this.db.prepare('SELECT plan_id FROM plan_task_links WHERE task_id=?').get(taskId); return row?this.plan(String(row['plan_id'])):undefined; }
+  approvePlan(id: string,input: unknown,baseHead: string,fingerprint: string,bindings: Record<string,string> = {}) {
+    const approval=approvalSchema.parse(input);
+    return this.transaction(()=>{ const p=this.plan(id);
+      if(p.revision!==approval.revision || p.contentHash!==approval.contentHash) throw new Error('Stale approval revision/hash');
+      if(p.approval && hash(p.approval)===hash(approval) && ['executing','paused','completed'].includes(p.status)) { if(hash(p.bindings??{})!==hash(bindings)) throw new Error('Approved profile configuration changed'); return p; }
+      if(p.status!=='awaiting_approval' || !p.proposal || p.proposal.questions.length) throw new Error('Plan is not awaiting approval');
+      if(p.baseHead!==baseHead || p.fingerprint!==fingerprint) throw new Error('Repository stale; analyze again');
+      const refs=new Set(approval.workers.map(w=>w.workerRef)); if(refs.size!==approval.workers.length || refs.size!==p.proposal.workers.length || p.proposal.workers.some(w=>!refs.has(w.workerRef))) throw new Error('Worker binding mismatch');
+      if(approval.maxWorkers>p.proposal.maxWorkers || approval.maxWorkers>this.goal(p.goalId).maxWorkers) throw new Error('Approval exceeds plan/goal limit');
+      p.approval=approval; p.bindings=bindings; p.executionSnapshot={baseHead,fingerprint}; p.status='materializing';
+      this.db.prepare('INSERT INTO plan_approvals VALUES(?,?,?,?,?)').run(id,p.revision,p.contentHash,JSON.stringify(approval),new Date().toISOString());
+      const manager='manager-'+id; this.db.prepare('INSERT OR IGNORE INTO agents VALUES(?,?,?)').run(manager,'manager',p.createdAt);
+      const retained=new Map(this.planLinks(id).map(l=>[l.stepKey,l.taskId]));
+      const ids=new Map(p.proposal.steps.map(s=>[s.key,retained.get(s.key)??randomUUID()]));
+      for(const w of approval.workers) this.db.prepare('INSERT OR IGNORE INTO agents VALUES(?,?,?)').run(id+'-'+w.workerRef,'worker',p.createdAt);
+      for(const s of p.proposal.steps) {
+        if(retained.has(s.key)) continue;
+        const taskId=ids.get(s.key)!, worker=approval.workers.find(w=>w.workerRef===s.workerRef)!;
+        this.db.prepare('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?)').run(taskId,s.title,[s.requirements,'Deliverable: '+s.deliverable,'Acceptance:\n'+s.acceptance.join('\n')].join('\n'),manager,id+'-'+s.workerRef,'queued',p.createdAt,p.createdAt);
+        this.db.prepare('INSERT INTO plan_task_links VALUES(?,?,?)').run(id,s.key,taskId);
+        const key=`${id}:${p.revision}:${s.key}`;
+        const input={taskId,adapter:worker.adapter,profile:worker.profile,executionId:id,requestKey:key,isolated:true,resumeReview:false,enqueue:true,scope:s.scope,check:s.check,...p.proposal.policy};
+        const dispatch: Dispatch={key,taskId,route:'workflow',input,state:'waiting',note:'Approved plan; waiting for scheduler',fingerprint:hash(input)};
+        this.db.prepare('INSERT INTO dispatches VALUES(?,?,?,?)').run(key,taskId,dispatch.state,JSON.stringify(dispatch));
+      }
+      for(const s of p.proposal.steps) for(const d of s.dependencies) this.db.prepare('INSERT OR IGNORE INTO dependencies VALUES(?,?)').run(ids.get(s.key)!,ids.get(d)!);
+      p.status='executing'; this.writePlan(p); return p;
+    });
   }
   dispatch(key: string): Dispatch | undefined {
     const row = this.db
@@ -570,7 +647,7 @@ export class Store {
   status() {
     return {
       projectId: this.projectId,
-      schemaVersion: 3,
+      schemaVersion: 4,
       agents: this.db.prepare("SELECT * FROM agents ORDER BY id").all(),
       tasks: this.db
         .prepare(

@@ -1,6 +1,8 @@
 import { z } from "zod";
 export const dispatchSchema = z.object({
   taskId: z.string().min(1),
+  executionId: z.string().optional(),
+  profile: z.string().default("default"),
   timeoutMs: z.number().int().min(100).max(3600000).default(120000),
   adapter: z.enum(["codex", "antigravity"]).default("codex"),
   maxRounds: z.number().int().min(1).max(10).default(3),

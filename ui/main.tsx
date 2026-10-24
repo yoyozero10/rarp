@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { api, mergeEvents, setToken, stream } from "./client";
 import type { Row, Snapshot, Task, Workspace } from "./client";
 import "./style.css";
+import { Planning } from "./planning";
 const names: Record<string, string> = {
   queued: "Chờ chạy",
   running: "Đang làm",
@@ -32,7 +33,7 @@ function App() {
     [pending, setPending] = useState(false),
     [events, setEvents] = useState<Row[]>([]),
     [selected, setSelected] = useState(""),
-    [view, setView] = useState("board"),
+    [view, setView] = useState("planning"),
     [tab, setTab] = useState("overview"),
     [theme, setTheme] = useState(
       localStorage.getItem("rarp-theme") ?? "system",
@@ -232,6 +233,7 @@ function App() {
         </a>
         <nav aria-label="Điều hướng">
           {[
+            ["planning", "Mục tiêu & kế hoạch"],
             ["board", "Công việc"],
             ["agents", "Agent"],
             ["timeline", "Dòng sự kiện"],
@@ -267,7 +269,7 @@ function App() {
           <div>
             <p className="eyebrow">KHÔNG GIAN LÀM VIỆC</p>
             <h1>
-              {view === "board"
+              {view === "planning" ? "Mục tiêu & kế hoạch" : view === "board"
                 ? "Công việc"
                 : view === "agents"
                   ? "Đội ngũ agent"
@@ -342,6 +344,7 @@ function App() {
           </section>
         ) : (
           <>
+            {view === "planning" && <Planning maxWorkers={snapshot.runtime.limits.maxWorkers} maxReviewers={snapshot.runtime.limits.maxReviewers} eventId={snapshot.lastEventId} />}
             <div className="summary">
               <span>
                 <b>{snapshot.tasks.length}</b> task

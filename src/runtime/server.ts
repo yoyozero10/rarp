@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import { createPlanning, loadProfiles } from "./planning.js";
+import type { PlanningAdapters } from "./planning.js";
 import {
   writeFileSync,
   readFileSync,
@@ -19,11 +21,13 @@ import type { SchedulerOptions } from "./scheduler.js";
 export async function startRuntime(
   rootInput: string,
   command: CommandSpec = codexCommand(),
-  adapters: { antigravity?: CommandSpec; manager?: CommandSpec } = {},
+  adapters: PlanningAdapters = {},
   options: SchedulerOptions = {},
 ) {
   const configuration = limitsSchema.parse(options);
   const root = realpathSync(rootInput);
+  const profiles = adapters.profiles ?? loadProfiles(root);
+  if(profiles) adapters = { ...adapters, profiles };
   if (existsSync(join(root, ".rarp", "recovery.lock")))
     throw new Error("Recovery in progress");
   const store = new Store(root);
@@ -64,6 +68,8 @@ export async function startRuntime(
     adapters,
     configuration,
   );
+  const planning = createPlanning(store, root, scheduler, command, adapters);
+  for(const plan of store.plans()) if(plan.status==='analyzing') store.planState(plan.id,'revision_requested','Analysis interrupted; analyze again');
   const heartbeat = setInterval(() => {
     try {
       scheduler.heartbeat();
@@ -83,6 +89,7 @@ export async function startRuntime(
     return (stopPromise ??= (async () => {
       if (closed) return;
       stopping = true;
+      await planning.shutdown();
       await scheduler.shutdown();
       if (cleanupError) throw cleanupError;
       observation.close();
@@ -123,6 +130,26 @@ export async function startRuntime(
         reply({ error: "Unauthorized" }, 401);
         return;
       }
+      if(req.method==='GET' && url.pathname==='/profiles') { reply(planning.profiles()); return; }
+      if (url.pathname === '/goals' || url.pathname === '/plans' || /^\/(goals|plans)\//.test(url.pathname)) {
+        const parts=url.pathname.split('/').filter(Boolean), kind=parts[0], id=parts[1], action=parts[2];
+        if(req.method==='GET') {
+          if(kind==='goals') reply(id?{goal:store.goal(id),plans:store.plans().filter(p=>p.goalId===id)}:{goals:store.goals()});
+          else reply(id?planning.detail(id):{plans:store.plans()});
+          return;
+        }
+        if(req.method!=='POST') { reply({error:'Unknown route'},404); return; }
+        if(stopping) throw new Error('Runtime stopping');
+        let body=''; for await(const chunk of req) { body+=String(chunk); if(body.length>262144) throw new Error('Request too large'); }
+        const input=JSON.parse(body||'{}');
+        if(kind==='goals' && !id) reply(store.createGoal(input),201);
+        else if(kind==='plans' && id && action==='update') reply(planning.update(id,input));
+        else if(kind==='plans' && id && action==='analyze') reply(await planning.analyze(id,input));
+        else if(kind==='plans' && id && action==='approve') reply(planning.approve(id,input),202);
+        else if(kind==='plans' && id && ['reject','cancel','pause','resume'].includes(action??'')) reply(await planning.control(id,action!));
+        else reply({error:'Unknown route'},404);
+        return;
+      }
       if (observation.handle(req, res, url)) return;
       if (req.method === "GET" && req.url === "/status") {
         reply(snapshot());
@@ -134,6 +161,7 @@ export async function startRuntime(
       }
       if (req.url === "/stop") {
         stopping = true;
+        await planning.shutdown();
         await scheduler.shutdown();
         if (cleanupError) throw cleanupError;
         reply({ state: "stopped" });
@@ -203,6 +231,7 @@ export async function startRuntime(
             assignee: z.string().optional(),
           })
           .parse(data);
+        if(store.taskPlan(input.taskId)) throw new Error('Plan task state is managed by execution; pause or revise the plan');
         if (scheduler.has(input.taskId))
           throw new Error(
             "Cancel the active workflow before changing this task",
@@ -311,7 +340,7 @@ export async function runtimeRequest(
       "content-type": "application/json",
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(route.endsWith('/analyze') ? 130000 : 20000),
   });
   const data = (await response.json()) as { error?: string };
   if (!response.ok) throw new Error(data.error ?? "Runtime request failed");

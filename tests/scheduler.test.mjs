@@ -460,10 +460,10 @@ test("v2 migration preserves tasks and rejects invalid capacity before creating 
     task = f.create("a.txt");
   f.store.close();
   const db = new DatabaseSync(join(f.root, ".rarp", "state.db"));
-  db.exec("DROP TABLE dispatches; PRAGMA user_version=2");
+  db.exec("DROP TABLE planner_logs; DROP TABLE plan_task_links; DROP TABLE plan_approvals; DROP TABLE plan_revisions; DROP TABLE plans; DROP TABLE goals; DROP TABLE dispatches; PRAGMA user_version=2");
   db.close();
   const migrated = new Store(f.root);
-  assert.equal(migrated.status().schemaVersion, 3);
+  assert.equal(migrated.status().schemaVersion, 4);
   assert.equal(migrated.show(task.id).status, "queued");
   assert.deepEqual(migrated.dispatches(), []);
   migrated.close();
