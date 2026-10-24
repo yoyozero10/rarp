@@ -1,6 +1,11 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { join, isAbsolute } from "node:path";
+import { join, isAbsolute, resolve } from "node:path";
+export function canonicalPath(path: string) {
+  // Native Windows resolution expands 8.3 names used by hosted-runner TEMP paths.
+  const normalized = resolve(realpathSync.native(path));
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
 export interface Workspace {
   taskId: string;
   path: string;
@@ -51,8 +56,8 @@ export function prepareWorkspace(
   validateScope(scope);
   if (!check.length) throw new Error("A verification command is required");
   if (
-    realpathSync(git(root, "rev-parse", "--show-toplevel")).toLowerCase() !==
-    realpathSync(root).toLowerCase()
+    canonicalPath(git(root, "rev-parse", "--show-toplevel")) !==
+    canonicalPath(root)
   )
     throw new Error("Use the Git repository root");
   if (git(root, "status", "--porcelain"))

@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   git,
+  canonicalPath,
   prepareWorkspace,
   checkpoint,
   verifyWorkspace,
@@ -38,6 +39,21 @@ function edited(root, id = "task") {
   checkpoint(ws);
   return ws;
 }
+
+test("repository root comparison accepts native Windows path aliases", () => {
+  const root = repo();
+  assert.equal(
+    canonicalPath(root),
+    canonicalPath(git(root, "rev-parse", "--show-toplevel")),
+  );
+  if (process.platform === "win32") {
+    assert.equal(
+      canonicalPath(root),
+      canonicalPath(root.replaceAll("\\", "/")),
+    );
+    assert.equal(canonicalPath(root), canonicalPath("\\\\?\\" + root));
+  }
+});
 test("worktree scope, verified integration and repeated integration", () => {
   const root = repo(),
     base = git(root, "rev-parse", "HEAD"),
@@ -85,7 +101,8 @@ test("failed verification and merge conflicts preserve main checkout", () => {
   );
 });
 test("resolved integration conflict can be retried without repeating the merge", () => {
-  const root = repo(), ws = edited(root);
+  const root = repo(),
+    ws = edited(root);
   writeFileSync(join(root, "feature.txt"), "competing");
   git(root, "add", ".");
   git(root, "commit", "-m", "competing change");
