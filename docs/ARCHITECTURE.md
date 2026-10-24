@@ -24,6 +24,12 @@ CLI / UI tương lai -> API local -> Runtime -> Agent adapters -> Agent CLI
 - Mỗi worker sửa code dùng Git worktree riêng; manager tích hợp tuần tự rồi kiểm tra kết quả chung.
 - Config chỉ chứa tên biến môi trường cho credentials. Adapter 9router dùng base URL/model cấu hình được; API key không lưu trong repository hoặc events.
 
+## Scheduler — Phase 6
+
+Một runtime/PID vẫn sở hữu dự án. SQLite v3 lưu dispatch theo request key, unique pending task. Scheduler giữ Map workflow đang chạy, giới hạn slot và reviewer FIFO riêng, phân biệt worktree song song với tác vụ root độc quyền. Queue chỉ nhận yêu cầu explicit enqueue, không tự phân rã mục tiêu. Scope chồng nhau, worker bận và dependency chưa integrated được giữ chờ.
+
+Worker-host cũng quản lý lệnh verification không có protocol model, giữ tree cleanup và output limit. Run journal ghi PID host trước khi gửi lệnh; recovery giữ accepted và trả reviewing về submitted. Dispatch active bị đánh dấu interrupted, waiting giữ nguyên và cần resume sau startup. Integration có run riêng, serial promise queue; kiểm thử trên merge candidate xong mới fast-forward main. Snapshot đa worker dùng workers/queue/limits; active giữ tương thích client một worker.
+
 ## Quan hệ với Squad
 
 Tham khảo thiết kế và test hành vi của https://github.com/mco-org/squad. Rarp là triển khai TypeScript riêng, không chuyển toàn bộ Rust từng dòng. Chưa sao chép mã nguồn Squad. Nếu tái sử dụng mã, lưu nguồn, revision và thông báo license tương ứng.

@@ -4,7 +4,36 @@ CLI điều phối nhiều AI agent trên máy local: lập kế hoạch, giao v
 
 ## Trạng thái
 
-Phase 5 đã có dashboard React local: task board, agent, dependency, timeline, diff/test evidence và các thao tác điều khiển. Snapshot nhất quán và SSE có cursor hỗ trợ reconnect. Giữ worktree/recovery của Phase 4; [kiểm chứng Phase 4](docs/PHASE4-VALIDATION.md) đã đạt bằng GPT-6.1 Sol. Mỗi dự án hiện chạy tối đa một worker tại một thời điểm.
+Phase 6 bổ sung hàng chờ bền vững và nhiều workflow cách ly chạy đồng thời. Mặc định 2 slot workflow, 1 reviewer; cấu hình 1–16 slot và đã kiểm chứng 4 worker bằng barrier. Dashboard hiển thị mọi workflow, slot trống, reviewer và lý do chờ. Giữ các chức năng worktree/recovery, diff/evidence và event replay. Xem [kiểm chứng Phase 6](docs/PHASE6-VALIDATION.md).
+
+## Phase 6: nhiều worker
+
+```powershell
+npm run build
+node dist/cli/index.js runtime start --max-workers 4 --max-reviewers 1
+node dist/cli/index.js workflow run TASK_ID --isolated --scope src/feature.mjs --check-json '["node","--test","tests/feature.test.mjs"]' --enqueue --request-key feature-v1
+node dist/cli/index.js runtime status
+node dist/cli/index.js runtime queue
+node dist/cli/index.js runtime cancel --task TASK_ID
+node dist/cli/index.js runtime pause
+node dist/cli/index.js runtime resume
+```
+
+Gửi các task độc lập với worker khác nhau và scope không chồng nhau. `--enqueue` lưu yêu cầu để chờ slot, worker, scope và dependency; bỏ cờ này thì yêu cầu chưa sẵn sàng trả lỗi ngay. Mỗi task chỉ có một dispatch đang chờ/chạy. Cùng request key không tạo attempt mới; retry đã thất bại cần key mới. Queue không tự phân rã hoặc tự lấy mọi task queued: chỉ nhận yêu cầu đã gửi vào scheduler.
+
+Một slot giữ toàn bộ vòng worker → verification → chờ reviewer → review → sửa. `maxReviewers` giới hạn riêng số lượt review thực sự đang chạy trong các slot đó. Cùng worker ID không nhận hai workflow; phạm vi file/thư mục chồng nhau phải chờ. Task `accepted` chưa tích hợp vẫn giữ phạm vi để tránh task sau bắt đầu từ code cũ. Task phụ thuộc chờ cả nghiệm thu và tích hợp của dependency cách ly.
+
+```powershell
+node dist/cli/index.js task integrate ACCEPTED_TASK_ID
+```
+
+Tích hợp được xếp nối tiếp, có thể chạy trong lúc các worktree độc lập khác hoạt động. Checkout chính chỉ cập nhật sau kiểm thử trên kết quả chung. Verification chạy bất đồng bộ, có timeout và cleanup cây tiến trình. UI gửi yêu cầu tích hợp bất đồng bộ, hiển thị trạng thái thực tế; API `{taskId, async:true}` trả 202, mặc định vẫn đợi kết quả để tương thích CLI. Các thao tác Git ngắn vẫn đồng bộ.
+
+`runtime cancel --task ID` dừng đúng một workflow hoặc bỏ dispatch khỏi hàng chờ; các workflow khác tiếp tục. Khi có nhiều workflow, `runtime cancel` không có ID bị từ chối. `runtime stop` dừng mọi cây tiến trình do runtime quản lý. Pause chỉ ngăn dispatch mới, không dừng công việc đang chạy. Sau restart có queue tồn đọng, scheduler luôn paused; dùng `runtime resume` để tiếp tục. Sau crash phải `runtime recover` trước; dispatch đang chạy thành interrupted, không tự replay side effect. Kết quả accepted và commit được giữ; review gián đoạn có thể resume bằng key mới.
+
+Snapshot có `workers[]`, `queue[]`, `limits`, `paused`, `integration`, `lastIntegration`. `active` vẫn là workflow đầu tiên để giữ tương thích client cũ; client nhiều worker phải dùng `workers[]`. Có thể đăng ký nhiều worker, nhưng 16 chỉ là giới hạn cấu hình, không phải khẳng định khả năng tài khoản/máy.
+
+Demo tạm không gọi model: `node scripts/demo-phase6.mjs`; Enter giải phóng barrier worker/reviewer. Bài AI thật có tiêu thụ hạn mức: `node scripts/smoke-phase6.mjs --model gpt-6.1-sol --plain-tools`. Cờ `--plain-tools` tắt user hooks chỉ cho tiến trình test; giữ sandbox/approval. `--codex PATH` chọn executable có sẵn. Chi tiết và giới hạn xem báo cáo kiểm chứng.
 
 ## Phase 5: dashboard local
 
@@ -132,7 +161,7 @@ node dist/cli/index.js runtime stop
 
 Runtime chạy nền độc lập với CLI, bind 127.0.0.1 và giữ token/port trong `.rarp/runtime.json`; file này cũng là khóa tạo độc quyền. Sau stop sạch khóa được xóa. Nếu runtime crash, khóa được giữ để tránh tự chạy trùng; cần kiểm tra tiến trình/task trước khi xóa khóa thủ công. Không tự kill PID đọc từ khóa cũ.
 
-Một runtime xử lý một task mỗi lần. Worker xong chỉ chuyển sang `submitted`, manager vẫn review bằng CLI. Timeout/cancel/lỗi chuyển sang `failed` và lưu lý do; cancel runtime không đồng nghĩa hủy task vĩnh viễn. Có thể cho retry bằng manager chuyển `queued`. Không thao tác chuyển trạng thái thủ công của task đang được runtime chạy.
+`worker run` sửa trực tiếp thư mục dự án nên chạy độc quyền; nhiều workflow cách ly dùng scheduler Phase 6 ở trên. Worker xong chỉ chuyển sang `submitted`, manager vẫn review bằng CLI. Timeout/cancel/lỗi chuyển sang `failed` và lưu lý do; cancel runtime không đồng nghĩa hủy task vĩnh viễn. Có thể cho retry bằng manager chuyển `queued`. Không thao tác chuyển trạng thái thủ công của task đang được runtime chạy.
 
 Trạng thái runtime là starting/ready/working/stopping; kết quả worker là exited/failed. Adapter hiện chạy non-interactive với approval never: không hỗ trợ tiếp tục từ waiting_input/waiting_permission và không suy diễn hai trạng thái đó từ log. Khi bị từ chối công cụ, xem kết quả và log trước khi nghiệm thu.
 
@@ -161,6 +190,6 @@ node dist/cli/index.js runtime stop
 
 `changes_requested` được lưu cùng evidence rồi chuyển thành feedback cho attempt mới. Hết max-rounds thì task giữ `changes_requested`; manager có thể đưa lại queued thủ công. Output review không hợp lệ, timeout, quyền công cụ bị từ chối hoặc cancel sẽ dừng workflow, không tự retry lỗi hạ tầng và không tự accept. Lỗi trong review chuyển task sang failed nhưng giữ nguyên attempt đã submitted. Events phân biệt worker.output và review.output, cùng task/attempt ID.
 
-Một workflow chạy từng worker/reviewer nối tiếp trong cùng thư mục. Chưa tự phân rã mục tiêu, tự nhận task từ queue, chạy nhiều worker song song hoặc phục hồi vòng đang chạy sau crash. Task dependency vẫn cần accepted trước khi dispatch.
+Một workflow chạy worker/reviewer nối tiếp trong cùng worktree; nhiều workflow cách ly có thể chạy song song qua Phase 6. Chưa tự phân rã mục tiêu, tự nhận mọi task queued hoặc resume phiên model sau crash. Queue chỉ chứa yêu cầu enqueue tường minh; dependency cần accepted và integrated trước khi dispatch cách ly.
 
 Antigravity mặc định dùng sandbox, không tự bỏ duyệt quyền. Headless có thể trả SUCCESS nhưng kèm denied_actions; adapter coi đây là thất bại. Script kiểm thử thật `node scripts/smoke-phase3.mjs` chạy hai task nối tiếp qua Antigravity và Codex; `--codex-only` thử riêng Codex. Tùy chọn `--allow-agy-auto-approve` chỉ dành cho bài test tạm khi người dùng cho phép rõ ràng: nó thêm dangerously-skip-permissions cho tiến trình Antigravity đó, không sửa cấu hình lâu dài và không phải một sandbox giới hạn thư mục.

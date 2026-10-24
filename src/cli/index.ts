@@ -42,7 +42,7 @@ program
   .command("about")
   .action(() =>
     console.log(
-      "Rarp Phase 5: local dashboard, event replay and task controls.",
+      "Rarp Phase 6: durable scheduling, parallel isolated workflows and bounded review.",
     ),
   );
 program
@@ -115,6 +115,21 @@ runtime
     ),
   );
 runtime.command("runs").action(() => run((s) => s.runs()));
+runtime.command("queue").action(() => run((s) => s.dispatches()));
+for (const action of ["pause", "resume"] as const)
+  runtime
+    .command(action)
+    .action(async () =>
+      console.log(
+        JSON.stringify(
+          await runtimeRequest(
+            program.opts()["project"] as string,
+            "scheduler",
+            { action },
+          ),
+        ),
+      ),
+    );
 task
   .command("workspace <id>")
   .action((id: string) => run((s) => s.workspace(id) ?? null));
@@ -135,40 +150,58 @@ runtime
     "codex",
   )
   .option("--agy <executable>", "Antigravity executable", "agy")
-  .action(async (options: { codex: string; agy: string }) => {
-    const root = resolve(program.opts()["project"] as string);
-    const child = fork(
-      fileURLToPath(new URL("../runtime/daemon.js", import.meta.url)),
-      [root, options.codex, options.agy],
-      {
-        detached: true,
-        windowsHide: true,
-        stdio: ["ignore", "ignore", "ignore", "ipc"],
-        execArgv: [],
-      },
-    );
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        child.kill();
-        reject(new Error("Runtime startup timeout"));
-      }, 15000);
-      child.once("error", (error) => {
-        clearTimeout(timer);
-        reject(error);
+  .option("--max-workers <n>", "Concurrent workflow slots (1–16)", "2")
+  .option("--max-reviewers <n>", "Concurrent review invocations (1–16)", "1")
+  .action(
+    async (options: {
+      codex: string;
+      agy: string;
+      maxWorkers: string;
+      maxReviewers: string;
+    }) => {
+      const root = resolve(program.opts()["project"] as string);
+      const child = fork(
+        fileURLToPath(new URL("../runtime/daemon.js", import.meta.url)),
+        [
+          root,
+          options.codex,
+          options.agy,
+          options.maxWorkers,
+          options.maxReviewers,
+        ],
+        {
+          detached: true,
+          windowsHide: true,
+          stdio: ["ignore", "ignore", "ignore", "ipc"],
+          execArgv: [],
+        },
+      );
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          child.kill();
+          reject(new Error("Runtime startup timeout"));
+        }, 15000);
+        child.once("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+        child.once("exit", (code) => {
+          clearTimeout(timer);
+          reject(new Error(`Runtime exited during startup: ${code}`));
+        });
+        child.once(
+          "message",
+          (message: { ready?: boolean; error?: string }) => {
+            clearTimeout(timer);
+            if (message.error) reject(new Error(message.error));
+            else resolve();
+            child.unref();
+          },
+        );
       });
-      child.once("exit", (code) => {
-        clearTimeout(timer);
-        reject(new Error(`Runtime exited during startup: ${code}`));
-      });
-      child.once("message", (message: { ready?: boolean; error?: string }) => {
-        clearTimeout(timer);
-        if (message.error) reject(new Error(message.error));
-        else resolve();
-        child.unref();
-      });
-    });
-    console.log(JSON.stringify(await runtimeRequest(root, "status")));
-  });
+      console.log(JSON.stringify(await runtimeRequest(root, "status")));
+    },
+  );
 runtime
   .command("status")
   .action(async () =>
@@ -211,10 +244,13 @@ program
   );
 runtime
   .command("cancel")
-  .action(async () =>
+  .option("--task <id>", "Cancel one active or queued task")
+  .action(async (options: { task?: string }) =>
     console.log(
       JSON.stringify(
-        await runtimeRequest(program.opts()["project"] as string, "cancel", {}),
+        await runtimeRequest(program.opts()["project"] as string, "cancel", {
+          taskId: options.task,
+        }),
       ),
     ),
   );
@@ -228,6 +264,7 @@ program
   .option("--request-key <key>", "Persistent idempotency key")
   .option("--isolated", "Run in a task Git worktree")
   .option("--resume-review", "Review an existing submitted result")
+  .option("--enqueue", "Persist and wait for capacity/dependencies")
   .option(
     "--scope <paths...>",
     "Allowed repository-relative files/directories",
@@ -245,6 +282,7 @@ program
         requestKey?: string;
         isolated?: boolean;
         resumeReview?: boolean;
+        enqueue?: boolean;
         scope: string[];
         checkJson: string;
       },
@@ -263,6 +301,7 @@ program
               requestKey: options.requestKey,
               isolated: options.isolated,
               resumeReview: options.resumeReview,
+              enqueue: options.enqueue,
               scope: options.scope,
               check: JSON.parse(options.checkJson),
             },

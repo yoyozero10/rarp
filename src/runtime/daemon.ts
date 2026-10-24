@@ -6,6 +6,10 @@ try {
     process.argv[2]!,
     codexCommand(process.argv[3] ?? "codex"),
     { antigravity: antigravityCommand(process.argv[4] ?? "agy") },
+    {
+      maxWorkers: Number(process.argv[5] ?? 2),
+      maxReviewers: Number(process.argv[6] ?? 1),
+    },
   );
   process.send?.({ ready: true });
   process.disconnect?.();

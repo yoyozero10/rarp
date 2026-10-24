@@ -59,6 +59,15 @@ Trạng thái 2026-10-24: đã triển khai dashboard React local, snapshot nh�
 - Thêm thao tác cancel/reassign/approve với trạng thái pending/succeeded/failed.
 - Đạt khi reload/reconnect không mất hoặc nhân đôi sự kiện; UI phản ánh đúng database; đóng UI không làm runtime dừng.
 
+## M6 — Nhiều worker song song
+
+Trạng thái 2026-10-24: đã triển khai maxWorkers/maxReviewers, queue bền vững, scope/worker ownership, dependency gate, cancel/recovery theo task và integration tuần tự. Mặc định 2 slot, cấu hình 1–16; 4 worker được kiểm chứng bằng barrier và crash thật. Xem docs/PHASE6-VALIDATION.md.
+
+- Một slot giữ toàn workflow; review FIFO có giới hạn riêng, verification bất đồng bộ có cancellation.
+- Queue tồn đọng sau restart paused; dispatch bị ngắt không tự replay.
+- UI hiển thị workers[], queue, slot, stage/PID và lý do chờ; active cũ chỉ là workflow đầu tiên.
+- Đạt khi 4 worker chạy độc lập đồng thời, cancel một task không dừng task khác, dependency chờ integration và kết quả chung qua test.
+
 ## Nhánh mở rộng — Model API qua 9router
 
 - Hai endpoint đã qua smoke test kết nối trong chat; cần test riêng tool calling, streaming, lỗi và khả năng tương thích trước khi dùng làm worker.
@@ -75,7 +84,7 @@ Trạng thái 2026-10-24: đã triển khai dashboard React local, snapshot nh�
 
 ## Việc tiếp theo
 
-1. Mở rộng sau M5: scheduler nhiều worker và benchmark tải/log thực tế.
+1. Sau M6: benchmark tải/log và tài khoản thực tế trước khi nâng capacity trên 4.
 2. Trước tác vụ dài không giám sát: containment tiến trình Windows mạnh hơn và mở rộng kiểm chứng crash recovery.
 3. Bổ sung giao thức waiting_input/waiting_permission khi có adapter tương tác.
 

@@ -38,10 +38,23 @@ export function runWorker(
     resolveResult = resolve;
     rejectResult = reject;
   });
+  const rawCheck = {
+    completed: true,
+    failed: false,
+    result: "",
+    failureReason: "",
+    finish() {},
+    feed(text: string) {
+      this.result = (this.result + text).slice(-19000);
+      event({ type: "verification.output", text });
+    },
+  };
   const parser =
-    command.protocol === "antigravity"
-      ? new AntigravityStream(event)
-      : new CodexStream(event);
+    command.protocol === "check"
+      ? rawCheck
+      : command.protocol === "antigravity"
+        ? new AntigravityStream(event)
+        : new CodexStream(event);
   async function finish(reason: string, code?: number | null) {
     if (finishing) return;
     finishing = true;
@@ -72,14 +85,14 @@ export function runWorker(
         code === 0 &&
         parser.completed &&
         !parser.failed &&
-        Boolean(parser.result.trim());
+        (command.protocol === "check" || Boolean(parser.result.trim()));
       resolveResult({
         success,
         reason,
         note: success
-          ? parser.result
+          ? parser.result || "Verification command passed"
           : parser.failureReason ||
-            `Worker ${reason}; exit=${code ?? "unknown"}; completed=${parser.completed}`,
+            `Worker ${reason}; exit=${code ?? "unknown"}; completed=${parser.completed}${command.protocol === "check" ? "\n" + parser.result : ""}`,
       });
     } catch (error) {
       rejectResult(new Error(`Worker cleanup failed: ${String(error)}`));
@@ -105,7 +118,9 @@ export function runWorker(
           return;
         }
         if (message.type === "stdout") parser.feed(message.text ?? "");
-        if (message.type === "stderr")
+        if (message.type === "stderr" && command.protocol === "check")
+          parser.feed(message.text ?? "");
+        else if (message.type === "stderr")
           event({ type: "stderr", text: message.text });
         if (message.type === "spawn-error") {
           event({ type: "spawn-error", text: message.text });
