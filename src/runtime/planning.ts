@@ -36,6 +36,10 @@ export function profileCommand(adapters: PlanningAdapters, command:CommandSpec, 
 }
 export function createPlanning(store:Store,root:string,scheduler: {snapshot:()=>{limits:{maxWorkers:number;maxReviewers:number}};cancel:(taskId?:string)=>Promise<void>},command:CommandSpec,adapters:PlanningAdapters) {
   const analyses=new Map<string,ReturnType<typeof runWorker>>();
+  const cliProfile=(selected?:CommandSpec)=>{
+    const args=selected?.args??[], index=args.findIndex(a=>a==='--profile'||a==='-p');
+    return index>=0?args[index+1]??null:null;
+  };
   const detail=(id:string)=>{ const p=store.plan(id); return {...p,counts:{tasks:p.proposal?.steps.length??0,workers:p.proposal?.workers.length??0,slots:p.approval?.maxWorkers??p.proposal?.maxWorkers??0},waves:p.proposal?waves(p.proposal):[],history:store.planHistory(id),tasks:store.planLinks(id).map(l=>({...l,task:store.show(l.taskId),workspace:store.workspace(l.taskId)})),logs:store.planLogs(id)}; };
   async function analyze(id:string,body:unknown) {
     const input=z.object({clarification:z.string().max(12000).optional()}).strict().parse(body), plan=store.plan(id);
@@ -52,7 +56,7 @@ export function createPlanning(store:Store,root:string,scheduler: {snapshot:()=>
     finally { analyses.delete(id); }
   }
   return {detail, analyze,
-    profiles() { const configured=Object.entries(adapters.profiles??{}).map(([id,p])=>({id,adapter:p.adapter,profile:id.slice(id.indexOf(':')+1),model:p.model,available:available(p.command.file),authenticated:p.authenticated,supported:true})); return {profiles:[{id:'codex:default',adapter:'codex',profile:'default',model:'CLI default',available:available(command.file),authenticated:null,supported:true},{id:'antigravity:default',adapter:'antigravity',profile:'default',model:null,available:!!adapters.antigravity && available(adapters.antigravity.file),authenticated:null,supported:!!adapters.antigravity},...configured].filter((p,i,all)=>all.findLastIndex(x=>x.id===p.id)===i),planner:{adapter:'codex',readOnly:true},reviewer:{adapter:'codex',separate:true}}; },
+    profiles() { const configured=Object.entries(adapters.profiles??{}).map(([id,p])=>({id,adapter:p.adapter,profile:id.slice(id.indexOf(':')+1),model:p.model,available:available(p.command.file),authenticated:p.authenticated,supported:true})); return {profiles:[{id:'codex:default',adapter:'codex',profile:'default',model:'CLI default',available:available(command.file),authenticated:null,supported:true},{id:'antigravity:default',adapter:'antigravity',profile:'default',model:null,available:!!adapters.antigravity && available(adapters.antigravity.file),authenticated:null,supported:!!adapters.antigravity},...configured].filter((p,i,all)=>all.findLastIndex(x=>x.id===p.id)===i),planner:{adapter:'codex',readOnly:true,profile:cliProfile(adapters.planner)},reviewer:{adapter:'codex',separate:true,profile:cliProfile(adapters.manager)}}; },
     update(id:string,body:unknown) { const input=z.object({revision:z.number().int().nonnegative(),proposal:z.unknown()}).strict().parse(body); if(analyses.has(id)) throw new Error('Analysis active'); const snap=repositorySnapshot(root); store.updatePlan(id,input.revision,input.proposal,snap.baseHead,snap.fingerprint); return detail(id); },
     approve(id:string,body:unknown) { const input=approvalSchema.parse(body), capacity=scheduler.snapshot().limits;
       if(input.maxWorkers>capacity.maxWorkers || input.maxReviewers>capacity.maxReviewers) throw new Error('Approval exceeds runtime capacity');

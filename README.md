@@ -14,6 +14,19 @@ Xem đề xuất, scope, dependency, wave, argv kiểm thử và chính sách re
 
 Kế hoạch lưu trong SQLite; draft nhập liệu và binding chưa duyệt giữ ở trình duyệt. Tạm dừng chỉ chặn lượt giao việc mới của kế hoạch; hủy chỉ tác động các task liên quan. Tích hợp `reviewed-local` không push/deploy; `manual` cần thao tác tích hợp riêng trước khi dependency tiếp tục.
 
+## Manager dùng Codex CLI profile riêng
+
+Nếu đã cấu hình profile `9router` cho Codex CLI, khởi động runtime như sau:
+
+```powershell
+node dist/cli/index.js --project "C:\duong-dan\du-an" runtime start --manager-profile 9router --max-workers 2 --max-reviewers 1
+node dist/cli/index.js --project "C:\duong-dan\du-an" ui
+```
+
+Cả planner và reviewer tự động chạy Codex với `--profile 9router`; Codex nạp provider, model và cấu hình xác thực từ profile của bạn. Rarp giữ sandbox read-only và JSON schema cho hai vai trò này. UI hiển thị profile manager đang dùng. Worker vẫn dùng CLI/profile đã chọn riêng; `--manager-profile` không thay cấu hình worker.
+
+Đây là profile gốc của **Codex CLI**, khác với profile worker do Rarp quản lý trong `.rarp/profiles.json`. Không truyền `"codex --profile 9router"` vào `--codex`: tùy chọn đó chỉ nhận executable. Nếu runtime đang chạy, dừng rồi khởi động lại với `--manager-profile`. Profile cần tồn tại và endpoint/model của nó phải hỗ trợ lượt gọi tương ứng; lỗi được trả về, không tự fallback provider.
+
 ## Phase 6: nhiều worker
 
 ```powershell

@@ -10,7 +10,8 @@ export function Planning({ maxWorkers, maxReviewers, eventId }: { maxWorkers:num
   const [title,setTitle]=useState(localStorage.getItem("rarp-goal-title")??""), [requirements,setRequirements]=useState(localStorage.getItem("rarp-goal-requirements")??""), [acceptance,setAcceptance]=useState(localStorage.getItem("rarp-goal-acceptance")??""), [limit,setLimit]=useState(Math.min(4,maxWorkers));
   const [busy,setBusy]=useState(false),[error,setError]=useState(""),[edit,setEdit]=useState(""),[clarification,setClarification]=useState(""),[bindings,setBindings]=useState<Approval["workers"]>([]),[slots,setSlots]=useState(1),[reviewers,setReviewers]=useState(1),[integration,setIntegration]=useState<Approval["integration"]>("reviewed-local"),[confirm,setConfirm]=useState(false);
   const [profiles,setProfiles]=useState<Profile[]>([]);
-  async function refresh() { const [p,g,available]=await Promise.all([api<{plans:Plan[]}>("plans"),api<{goals:Goal[]}>("goals"),api<{profiles:Profile[]}>("profiles")]);setPlans(p.plans);setGoals(g.goals);setProfiles(available.profiles);if(id)setDetail(await api<Detail>("plans/"+encodeURIComponent(id))); }
+  const [managerProfile,setManagerProfile]=useState<string|null>(null);
+  async function refresh() { const [p,g,available]=await Promise.all([api<{plans:Plan[]}>("plans"),api<{goals:Goal[]}>("goals"),api<{profiles:Profile[];reviewer:{profile:string|null}}>("profiles")]);setPlans(p.plans);setGoals(g.goals);setProfiles(available.profiles);setManagerProfile(available.reviewer.profile);if(id)setDetail(await api<Detail>("plans/"+encodeURIComponent(id))); }
   useEffect(()=>{void refresh().catch(e=>setError(String(e)));},[id,eventId]);
   useEffect(()=>{sessionStorage.setItem("rarp-plan",id);setDetail(null);setEdit("");setConfirm(false);},[id]);
   useEffect(()=>{if(!detail || detail.status!=="awaiting_approval")return;localStorage.setItem(`rarp-bindings-${detail.id}-${detail.revision}`,JSON.stringify(bindings));},[bindings]);
@@ -21,6 +22,7 @@ export function Planning({ maxWorkers, maxReviewers, eventId }: { maxWorkers:num
   function control(action:string){void run(async()=>{setDetail(await api<Detail>(`plans/${id}/${action}`,{}));});}
   return <section className="planning" aria-label="Lập kế hoạch mục tiêu">
     <h2>Mục tiêu → Đề xuất → Chọn CLI & duyệt → Thực thi</h2>
+    <p className="muted">Manager: Codex CLI · profile {managerProfile??"mặc định"}.</p>
     <p className="muted">Chỉ phân tích trước khi duyệt. Không khởi chạy worker, build hay test tự động ở bước đề xuất.</p>
     {error&&<p role="alert" className="alert">{error}</p>}
     <label>Kế hoạch đã lưu<select value={id} onChange={e=>setId(e.target.value)}><option value="">Mục tiêu mới</option>{plans.map(p=><option key={p.id} value={p.id}>{goals.find(g=>g.id===p.goalId)?.title??p.id} · r{p.revision} · {stateNames[p.status]??p.status}</option>)}</select></label>
