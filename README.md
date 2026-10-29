@@ -6,6 +6,8 @@ CLI điều phối nhiều AI agent trên máy local: lập kế hoạch, giao v
 
 Phase 8 đã triển khai khôi phục plan dừng, giữ task không đổi qua revision, ngân sách sửa/retry bền vững và kiểm tra toàn bộ checkout trước `completed`. Live manager `9router` với hai worker agy đã đạt trong repo TEMP, dùng ngoại lệ quyền được duyệt riêng. UI đã nghiệm thu trên runtime fixture; CI Windows/Ubuntu với Node 24/26 đạt tại commit `4b99c39`. Xem [kiểm chứng Phase 8](docs/PHASE8-VALIDATION.md).
 
+Bản hiện tại: 77/77 test local, CI xanh. Đây là công cụ tự host cho một người dùng trên một máy: chưa đóng gói phát hành (`private: true`, phải clone + `npm ci` + `npm run build`), chưa có `waiting_input`/`waiting_permission`, chưa giam tiến trình bằng job object trên Windows, chỉ nghe `127.0.0.1`, UI chưa có test tự động. Antigravity headless vẫn cần allow-rule trong `~/.gemini/antigravity-cli/settings.json` hoặc bật **toàn quyền** ở bước duyệt. Chi tiết và thứ tự ưu tiên ở [kế hoạch](docs/PLAN.md).
+
 ## Phase 8: khôi phục và tự sửa có giới hạn
 
 - Task accepted không cần tích hợp trước khi sửa revision; nội dung và dependency đã được chấp nhận phải giữ nguyên. Task không đổi giữ ID, lịch sử và workspace.
