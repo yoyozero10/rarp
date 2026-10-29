@@ -7,6 +7,7 @@ import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { runtimeRequest } from "../runtime/server.js";
 import { recoverRuntime } from "../runtime/recovery.js";
+import { doctor } from './doctor.js';
 const program = new Command()
   .name("rarp")
   .description("Local multi-agent task coordination")
@@ -23,6 +24,15 @@ function run(fn: (store: Store) => unknown, initialize = false) {
     store.close();
   }
 }
+program.command('doctor').description('Read-only installation and project diagnostics; no model calls')
+  .option('--codex <executable>','Codex executable','codex')
+  .option('--agy <executable>','Antigravity executable','agy')
+  .option('--manager-profile <name>','Codex CLI profile to check authentication')
+  .action((options:{codex:string;agy:string;managerProfile?:string})=>{
+    const report=doctor(program.opts()['project'] as string,options);
+    console.log(program.opts()['json']?JSON.stringify(report):report.checks.map(c=>`${c.status.toUpperCase()} ${c.name}: ${c.detail}${c.status!=='pass' && c.fix?'\n  '+c.fix:''}`).join('\n'));
+    if(!report.ok)process.exitCode=1;
+  });
 program
   .command("init")
   .description("Initialize storage (safe to repeat)")

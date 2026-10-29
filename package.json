@@ -2,6 +2,8 @@
   "name": "rarp",
   "version": "0.1.0",
   "private": true,
+  "license": "UNLICENSED",
+  "files": ["dist/**/*.js", "dist/ui", "schemas/*.json", "docs/*.md"],
   "description": "Local multi-agent orchestration runtime and CLI",
   "type": "module",
   "bin": {
@@ -14,7 +16,9 @@
     "dev": "tsx src/cli/index.ts",
     "build": "tsc -p tsconfig.json && vite build --config ui/vite.config.ts",
     "typecheck": "tsc --noEmit && tsc -p ui/tsconfig.json --noEmit",
-    "test": "npm run build && node --test tests/*.test.mjs"
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "prepack": "npm run build",
+    "test:package": "node scripts/package-check.mjs"
   },
   "dependencies": {
     "commander": "^15.0.0",
