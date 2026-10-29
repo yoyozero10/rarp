@@ -2,10 +2,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, lstatSync } from "node:fs";
 import { join, delimiter } from "node:path";
 import { z } from "zod";
-import { codexPlannerCommand } from "../adapters/codex.js";
+import { codexPlannerCommand, codexReviewCommand } from "../adapters/codex.js";
 import type { CommandSpec } from "../adapters/codex.js";
 import { antigravityCommand } from "../adapters/antigravity.js";
-import { hash, waves, approvalSchema } from "../core/plan.js";
+import { hash, waves, approvalSchema, planBudget, remainingTime } from "../core/plan.js";
 import type { Store } from "../storage/store.js";
 import { runWorker } from "./process.js";
 
@@ -40,7 +40,7 @@ export function createPlanning(store:Store,root:string,scheduler: {snapshot:()=>
     const args=selected?.args??[], index=args.findIndex(a=>a==='--profile'||a==='-p');
     return index>=0?args[index+1]??null:null;
   };
-  const detail=(id:string)=>{ const p=store.plan(id); return {...p,counts:{tasks:p.proposal?.steps.length??0,workers:p.proposal?.workers.length??0,slots:p.approval?.maxWorkers??p.proposal?.maxWorkers??0},waves:p.proposal?waves(p.proposal):[],history:store.planHistory(id),tasks:store.planLinks(id).map(l=>({...l,task:store.show(l.taskId),workspace:store.workspace(l.taskId)})),logs:store.planLogs(id)}; };
+  const detail=(id:string)=>{ const p=store.plan(id); return {...p,budget:p.proposal?planBudget(p):null,remainingMs:p.proposal?remainingTime(p):null,counts:{tasks:p.proposal?.steps.length??0,workers:p.proposal?.workers.length??0,slots:p.approval?.maxWorkers??p.proposal?.maxWorkers??0},waves:p.proposal?waves(p.proposal):[],history:store.planHistory(id),tasks:store.planLinks(id).map(l=>({...l,task:store.show(l.taskId),usage:store.taskUsage(l.taskId),workspace:store.workspace(l.taskId)})),logs:store.planLogs(id)}; };
   async function analyze(id:string,body:unknown) {
     const input=z.object({clarification:z.string().max(12000).optional()}).strict().parse(body), plan=store.plan(id);
     if(analyses.has(id) || ['executing','completed','cancelled','materializing'].includes(plan.status)) throw new Error('Plan cannot be analyzed now');
@@ -67,12 +67,12 @@ export function createPlanning(store:Store,root:string,scheduler: {snapshot:()=>
           else if(c.protocol==='antigravity') throw new Error('Antigravity requires an explicit authenticated model profile');
         }
       }
-      const snap=repositorySnapshot(root); store.approvePlan(id,input,snap.baseHead,snap.fingerprint,Object.fromEntries(input.workers.map(w=>[w.workerRef,hash(profileCommand(adapters,command,w.adapter,w.profile))]))); return detail(id);
+      const snap=repositorySnapshot(root); store.approvePlan(id,input,snap.baseHead,snap.fingerprint,{...Object.fromEntries(input.workers.map(w=>[w.workerRef,hash(profileCommand(adapters,command,w.adapter,w.profile))])),__manager:hash(adapters.manager??codexReviewCommand(command.file))}); return detail(id);
     },
     async control(id:string,action:string) { const p=store.plan(id); if(action==='cancel') { store.planState(id,'cancelled'); await analyses.get(id)?.cancel(); for(const l of store.planLinks(id)) { try { await scheduler.cancel(l.taskId); } catch(error) { const d=store.dispatches().find(d=>d.taskId===l.taskId && ['active','waiting'].includes(d.state)); if(d) throw error; } } }
       else if(action==='reject') { if(!['awaiting_approval','needs_clarification','received','failed'].includes(p.status)) throw new Error('Plan cannot be rejected'); store.planState(id,'rejected'); }
-      else if(action==='pause') { if(p.status!=='executing') throw new Error('Plan not executing'); store.planState(id,'paused','Human pause'); }
-      else if(action==='resume') { if(p.status!=='paused' || !p.approval) throw new Error('Approved paused execution required'); if(store.planLinks(id).some(l=>['failed','cancelled','changes_requested','blocked'].includes(store.show(l.taskId).status))) throw new Error('Failed work requires a new reviewed revision');       const snap=repositorySnapshot(root), expected=p.executionSnapshot??p; if(snap.baseHead!==expected.baseHead || snap.fingerprint!==expected.fingerprint) throw new Error('Repository stale; revise and approve again'); for(const w of p.approval.workers) if(p.bindings?.[w.workerRef]!==hash(profileCommand(adapters,command,w.adapter,w.profile))) throw new Error('Profile changed; revise and approve again'); store.planState(id,'executing'); }
+      else if(action==='pause') { if(p.status!=='executing') throw new Error('Plan not executing'); store.planState(id,'paused','Human pause','human'); for(const link of store.planLinks(id)) if(store.runs().some(r=>r['task_id']===link.taskId && r['state']==='active'))await scheduler.cancel(link.taskId); }
+      else if(action==='resume') { if(p.status==='executing')return detail(id);if(p.status!=='paused' || !p.approval) throw new Error('Approved paused execution required'); const snap=repositorySnapshot(root), expected=p.executionSnapshot??p; if(snap.baseHead!==expected.baseHead || snap.fingerprint!==expected.fingerprint) throw new Error('Repository stale; revise and approve again'); for(const w of p.approval.workers) {const selected=profileCommand(adapters,command,w.adapter,w.profile);if(!available(selected.file) || p.bindings?.[w.workerRef]!==hash(selected)) throw new Error('Profile changed or unavailable; revise and approve again');} store.retryPlan(id); }
       else throw new Error('Unknown action'); return detail(id);
     },
     async shutdown() { await Promise.all([...analyses.values()].map(a=>a.cancel())); }

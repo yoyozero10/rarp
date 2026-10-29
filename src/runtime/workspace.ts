@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { join, isAbsolute, resolve } from "node:path";
+import { join, isAbsolute, resolve, basename } from "node:path";
 export function canonicalPath(path: string) {
   // Native Windows resolution expands 8.3 names used by hosted-runner TEMP paths.
   const normalized = resolve(realpathSync.native(path));
@@ -52,6 +52,7 @@ export function prepareWorkspace(
   taskId: string,
   scope: string[],
   check: string[],
+  suffix = '',
 ): Workspace {
   validateScope(scope);
   if (!check.length) throw new Error("A verification command is required");
@@ -63,7 +64,7 @@ export function prepareWorkspace(
   if (git(root, "status", "--porcelain"))
     throw new Error("Main checkout must be clean");
   const base = git(root, "rev-parse", "HEAD");
-  const path = join(root, ".rarp", "worktrees", taskId);
+  const path = join(root, ".rarp", "worktrees", taskId + suffix);
   if (existsSync(path))
     throw new Error("Workspace already exists; inspect it before recovery");
   git(root, "worktree", "add", "--detach", path, base);
@@ -131,6 +132,7 @@ interface IntegrationPlan {
 }
 function planIntegration(root: string, workspace: Workspace): IntegrationPlan {
   if (!workspace.commit) throw new Error("No reviewed commit");
+  validateReviewedWorkspace(workspace);
   const before = git(root, "rev-parse", "HEAD");
   if (workspace.integrated) {
     git(root, "merge-base", "--is-ancestor", workspace.integrated, "HEAD");
@@ -144,7 +146,7 @@ function planIntegration(root: string, workspace: Workspace): IntegrationPlan {
     { windowsHide: true },
   );
   if (ancestor.status === 0) return { before, path: root, commit: before };
-  const path = join(root, ".rarp", "integrations", workspace.taskId);
+  const path = join(root, ".rarp", "integrations", basename(workspace.path));
   if (existsSync(path)) {
     if (git(path, "status", "--porcelain"))
       throw new Error(
@@ -171,6 +173,13 @@ function planIntegration(root: string, workspace: Workspace): IntegrationPlan {
     );
   }
   return { before, path, commit: git(path, "rev-parse", "HEAD") };
+}
+export function validateReviewedWorkspace(workspace: Workspace) {
+  validateScope(workspace.scope);
+  if (!workspace.commit || git(workspace.path,'rev-parse','HEAD')!==workspace.commit || git(workspace.path,'status','--porcelain'))
+    throw new Error('Workspace differs from reviewed commit');
+  const paths=execFileSync('git',['-C',workspace.path,'diff','--no-renames','--name-only','-z',workspace.base,workspace.commit],{encoding:'utf8',windowsHide:true}).split('\0').filter(Boolean);
+  if(paths.some(p=>!workspace.scope.some(s=>p===s || p.startsWith(s+'/'))))throw new Error('Reviewed commit exceeds task scope');
 }
 function finishIntegration(root: string, plan: IntegrationPlan) {
   if (

@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
-import { goalSchema, approvalSchema, validateProposal, hash } from "../core/plan.js";
-import type { Goal, Plan, Approval } from "../core/plan.js";
+import { goalSchema, approvalSchema, validateProposal, hash, planBudget, remainingTime } from "../core/plan.js";
+import type { Goal, Plan, Approval, StopReason, TaskUsage, Execution } from "../core/plan.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -117,11 +117,16 @@ export class Store {
     const proposal=validateProposal(input);
     return this.transaction(()=>{ const plan=this.plan(id); if(plan.revision!==revision) throw new Error('Plan revision changed'); if(['executing','materializing','completed','cancelled'].includes(plan.status)) throw new Error('Execution must not be edited; create a new goal');
       const links=this.planLinks(id);
-      if(links.some(l=>this.dispatches().some(d=>d.taskId===l.taskId && d.state==='active'))) throw new Error('Cancel active work before revising');
+      if(links.some(l=>this.dispatches().some(d=>d.taskId===l.taskId && d.state==='active') || this.runs().some(r=>r['task_id']===l.taskId && r['state']==='active'))) throw new Error('Cancel active work before revising');
       for(const link of links) {
         const task=this.show(link.taskId), old=plan.proposal?.steps.find(s=>s.key===link.stepKey), next=proposal.steps.find(s=>s.key===link.stepKey);
-        if(task.status==='accepted') { if(!this.workspace(task.id)?.integrated || hash(old)!==hash(next)) throw new Error('Completed steps must remain unchanged and integrated'); }
-        else { for(const d of this.dispatches().filter(d=>d.taskId===task.id && d.state==='waiting')) {d.state='cancelled';d.note='Superseded revision';this.db.prepare('UPDATE dispatches SET state=?,data=? WHERE request_key=?').run(d.state,JSON.stringify(d),d.key);} this.db.prepare('DELETE FROM plan_task_links WHERE plan_id=? AND step_key=?').run(id,link.stepKey); }
+        const unchanged=hash(old??null)===hash(next??null);
+        if(task.status==='accepted' && !unchanged) throw new Error('Accepted steps must remain unchanged');
+        // Accepted dependents cannot keep evidence from a replaced prerequisite.
+        const sameDependencies=(stepKey:string):boolean=>{const a=plan.proposal?.steps.find(s=>s.key===stepKey),b=proposal.steps.find(s=>s.key===stepKey);return hash(a??null)===hash(b??null) && !!a && a.dependencies.every(sameDependencies);};
+        if(task.status==='accepted' && !sameDependencies(link.stepKey)) throw new Error('Accepted dependencies must remain unchanged');
+        for(const d of this.dispatches().filter(d=>d.taskId===task.id && d.state==='waiting')) {d.state='cancelled';d.note='Superseded revision';this.db.prepare('UPDATE dispatches SET state=?,data=? WHERE request_key=?').run(d.state,JSON.stringify(d),d.key);}
+        if(!unchanged || task.status==='cancelled') this.db.prepare('DELETE FROM plan_task_links WHERE plan_id=? AND step_key=?').run(id,link.stepKey);
       }
       this.db.prepare('INSERT OR IGNORE INTO plan_revisions VALUES(?,?,?)').run(id,plan.revision,JSON.stringify(plan));
       plan.revision++; plan.proposal=proposal; plan.baseHead=baseHead; plan.fingerprint=fingerprint; plan.contentHash=hash({goal:this.goal(plan.goalId),proposal,baseHead,fingerprint}); delete plan.approval;
@@ -129,7 +134,61 @@ export class Store {
     });
   }
   planSnapshot(id: string,snapshot: {baseHead:string;fingerprint:string}) { this.transaction(()=>{const p=this.plan(id);p.executionSnapshot=snapshot;this.writePlan(p);}); }
-  planState(id: string,status: string,note?: string) { return this.transaction(()=>{ const p=this.plan(id); p.status=status; if(note!==undefined)p.note=note; this.writePlan(p); return p; }); }
+  planState(id: string,status: string,note?: string,reason?: StopReason) { return this.transaction(()=>{ const p=this.plan(id); if(status!=='executing' && p.execution?.startedAt){p.execution.elapsedMs=(p.execution.elapsedMs??0)+Date.now()-p.execution.startedAt;delete p.execution.startedAt;} p.status=status; if(note!==undefined)p.note=note; else delete p.note; if(reason)p.stopReason=reason;else delete p.stopReason; this.writePlan(p); return p; }); }
+  private execution(p: Plan): Execution {
+    return p.execution ??= {tasks:Object.fromEntries(this.planLinks(p.id).map(l=>[l.taskId,{rounds:this.show(l.taskId).attempts.length,retries:0}]))};
+  }
+  taskUsage(taskId: string): TaskUsage {
+    const p=this.taskPlan(taskId);
+    return p?.execution?.tasks[taskId] ?? {rounds:this.show(taskId).attempts.length,retries:0};
+  }
+  saveUsage(taskId: string, patch: Partial<TaskUsage>) {
+    this.transaction(()=>{const p=this.taskPlan(taskId);if(!p)return;const e=this.execution(p);e.tasks[taskId]={...(e.tasks[taskId]??{rounds:0,retries:0}),...patch};this.event('execution.usage',null,taskId,null,{planId:p.id,revision:p.revision,...e.tasks[taskId]});this.writePlan(p);});
+  }
+  startExecution(id: string) {
+    return this.transaction(()=>{const p=this.plan(id);const e=this.execution(p);e.startedAt??=Date.now();this.writePlan(p);return e.startedAt+planBudget(p).totalTimeoutMs-(e.elapsedMs??0);});
+  }
+  planVerification(id: string, verification: NonNullable<Execution['verification']>) {
+    this.transaction(()=>{const p=this.plan(id);this.execution(p).verification=verification;this.writePlan(p);});
+  }
+  repairAccepted(taskId: string, workspace: Workspace, feedback: string) {
+    this.transaction(()=>{const p=this.taskPlan(taskId);if(!p || p.status!=='executing' || this.show(taskId).status!=='accepted')throw new Error('Accepted execution task required');
+      const usage=this.execution(p).tasks[taskId]!;if(usage.rounds>=planBudget(p).maxRounds)throw new Error('Round budget exhausted');
+      usage.feedback=feedback;usage.stopReason='verification';
+      const previous=this.workspace(taskId);
+      this.db.prepare('UPDATE workspaces SET data=? WHERE task_id=?').run(JSON.stringify(workspace),taskId);
+      this.event('task.repair',null,taskId,null,{feedback,previousWorkspace:previous,workspace});
+      this.queuePlanTask(p,this.planLinks(p.id).find(l=>l.taskId===taskId)!.stepKey,taskId);this.writePlan(p);
+    });
+  }
+  retryPlan(id: string) {
+    return this.transaction(()=>{const p=this.plan(id);if(!p.approval || !['paused','executing'].includes(p.status))throw new Error('Approved execution required');
+      const e=this.execution(p), budget=planBudget(p);
+      if(remainingTime(p)<=0)throw new Error('Time budget exhausted; approve a larger budget in a new revision');
+      for(const l of this.planLinks(id)) {
+        const task=this.show(l.taskId),usage=e.tasks[task.id]??{rounds:0,retries:0};
+        if(task.status==='accepted')continue;
+        if(['running','reviewing'].includes(task.status))continue;
+        if(task.status==='cancelled')throw new Error('Cancelled task requires a new revision');
+        if(task.status!=='submitted' && usage.rounds>=budget.maxRounds)throw new Error('Round budget exhausted; approve a larger budget in a new revision');
+        if(this.dispatches().some(d=>d.taskId===task.id && ['waiting','active'].includes(d.state)))continue;
+        this.queuePlanTask(p,l.stepKey,task.id);
+      }
+      p.status='executing';delete p.note;delete p.stopReason;this.writePlan(p);return p;
+    });
+  }
+  private queuePlanTask(p: Plan,stepKey: string,taskId: string) {
+    const step=p.proposal!.steps.find(s=>s.key===stepKey)!, worker=p.approval!.workers.find(w=>w.workerRef===step.workerRef)!;
+    const task=this.show(taskId),resumeReview=task.status==='submitted';
+    if(task.status!=='queued' && !resumeReview) {
+      this.db.prepare("UPDATE tasks SET status='queued',updated_at=? WHERE id=?").run(new Date().toISOString(),taskId);
+      this.event('task.transitioned',task.created_by,taskId,null,{from:task.status,to:'queued',note:'Approved retry; preserve feedback and workspace'});
+    }
+    const key=`${p.id}:${p.revision}:${stepKey}:${this.dispatches().filter(d=>d.taskId===taskId).length}`;
+    const input={taskId,adapter:worker.adapter,profile:worker.profile,executionId:p.id,requestKey:key,isolated:true,resumeReview,enqueue:true,scope:step.scope,check:step.check,...planBudget(p)};
+    const dispatch:Dispatch={key,taskId,route:'workflow',input,state:'waiting',note:'Approved plan; waiting for scheduler',fingerprint:hash(input)};
+    this.db.prepare('INSERT INTO dispatches VALUES(?,?,?,?)').run(key,taskId,dispatch.state,JSON.stringify(dispatch));
+  }
   plannerLog(id: string,data: unknown) { this.db.prepare('INSERT INTO planner_logs(plan_id,data,created_at) VALUES(?,?,?)').run(id,JSON.stringify(data),new Date().toISOString()); }
   planHistory(id: string) { return this.db.prepare('SELECT data FROM plan_revisions WHERE plan_id=? ORDER BY revision').all(id).map(r=>JSON.parse(String(r['data'])) as Plan); }
   planLogs(id: string) { return this.db.prepare('SELECT id,data,created_at FROM planner_logs WHERE plan_id=? ORDER BY id').all(id).map(r=>({...r,data:JSON.parse(String(r['data'])) as unknown})); }
@@ -145,23 +204,27 @@ export class Store {
       const refs=new Set(approval.workers.map(w=>w.workerRef)); if(refs.size!==approval.workers.length || refs.size!==p.proposal.workers.length || p.proposal.workers.some(w=>!refs.has(w.workerRef))) throw new Error('Worker binding mismatch');
       if(approval.maxWorkers>p.proposal.maxWorkers || approval.maxWorkers>this.goal(p.goalId).maxWorkers) throw new Error('Approval exceeds plan/goal limit');
       p.approval=approval; p.bindings=bindings; p.executionSnapshot={baseHead,fingerprint}; p.status='materializing';
+      this.execution(p);
       this.db.prepare('INSERT INTO plan_approvals VALUES(?,?,?,?,?)').run(id,p.revision,p.contentHash,JSON.stringify(approval),new Date().toISOString());
       const manager='manager-'+id; this.db.prepare('INSERT OR IGNORE INTO agents VALUES(?,?,?)').run(manager,'manager',p.createdAt);
       const retained=new Map(this.planLinks(id).map(l=>[l.stepKey,l.taskId]));
       const ids=new Map(p.proposal.steps.map(s=>[s.key,retained.get(s.key)??randomUUID()]));
       for(const w of approval.workers) this.db.prepare('INSERT OR IGNORE INTO agents VALUES(?,?,?)').run(id+'-'+w.workerRef,'worker',p.createdAt);
       for(const s of p.proposal.steps) {
-        if(retained.has(s.key)) continue;
+        if(retained.has(s.key)) {
+          const taskId=retained.get(s.key)!;
+          if(this.show(taskId).status!=='accepted') this.queuePlanTask(p,s.key,taskId);
+          continue;
+        }
         const taskId=ids.get(s.key)!, worker=approval.workers.find(w=>w.workerRef===s.workerRef)!;
         this.db.prepare('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?)').run(taskId,s.title,[s.requirements,'Deliverable: '+s.deliverable,'Acceptance:\n'+s.acceptance.join('\n')].join('\n'),manager,id+'-'+s.workerRef,'queued',p.createdAt,p.createdAt);
         this.db.prepare('INSERT INTO plan_task_links VALUES(?,?,?)').run(id,s.key,taskId);
-        const key=`${id}:${p.revision}:${s.key}`;
-        const input={taskId,adapter:worker.adapter,profile:worker.profile,executionId:id,requestKey:key,isolated:true,resumeReview:false,enqueue:true,scope:s.scope,check:s.check,...p.proposal.policy};
-        const dispatch: Dispatch={key,taskId,route:'workflow',input,state:'waiting',note:'Approved plan; waiting for scheduler',fingerprint:hash(input)};
-        this.db.prepare('INSERT INTO dispatches VALUES(?,?,?,?)').run(key,taskId,dispatch.state,JSON.stringify(dispatch));
+        p.execution!.tasks[taskId]={rounds:0,retries:0};
+        this.queuePlanTask(p,s.key,taskId);
       }
+      for(const taskId of ids.values())this.db.prepare('DELETE FROM dependencies WHERE task_id=?').run(taskId);
       for(const s of p.proposal.steps) for(const d of s.dependencies) this.db.prepare('INSERT OR IGNORE INTO dependencies VALUES(?,?)').run(ids.get(s.key)!,ids.get(d)!);
-      p.status='executing'; this.writePlan(p); return p;
+      p.status='executing'; delete p.note;delete p.stopReason;this.writePlan(p); return p;
     });
   }
   dispatch(key: string): Dispatch | undefined {

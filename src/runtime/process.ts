@@ -31,6 +31,7 @@ export function runWorker(
   );
   let finishing = false;
   let bytes = 0;
+  let diagnostics = '';
   let drainTimer: NodeJS.Timeout | undefined;
   let resolveResult: (result: WorkerResult) => void;
   let rejectResult: (error: Error) => void;
@@ -92,7 +93,7 @@ export function runWorker(
         note: success
           ? parser.result || "Verification command passed"
           : parser.failureReason ||
-            `Worker ${reason}; exit=${code ?? "unknown"}; completed=${parser.completed}${command.protocol === "check" ? "\n" + parser.result : ""}`,
+            `Worker ${reason}; exit=${code ?? "unknown"}; completed=${parser.completed}${command.protocol === "check" ? "\n" + parser.result : "\n"+diagnostics}`,
       });
     } catch (error) {
       rejectResult(new Error(`Worker cleanup failed: ${String(error)}`));
@@ -118,6 +119,7 @@ export function runWorker(
           return;
         }
         if (message.type === "stdout") parser.feed(message.text ?? "");
+        if(message.type==='stderr' || message.type==='spawn-error')diagnostics=(diagnostics+(message.text??'')).slice(-8000);
         if (message.type === "stderr" && command.protocol === "check")
           parser.feed(message.text ?? "");
         else if (message.type === "stderr")
