@@ -105,7 +105,7 @@ Trạng thái: đã triển khai 2026-10-28, nghiệm thu UI và CI Windows/Ubun
 
 Bước sau Phase 8 (2026-10-30): triển khai `rarp doctor` chỉ đọc, tarball npm với danh sách file cho phép, `prepack` build và kiểm thử cài gói độc lập bằng production dependencies. Thêm kiểm thử gói vào CI Windows/Ubuntu × Node 24/26. Chưa publish npm registry; giữ `private: true` cho đến khi chốt tên gói và chính sách phát hành. `waiting_permission` đã xong; `waiting_input` và Windows Job Object vẫn là phạm vi tiếp theo.
 
-Kiểm chứng local Windows Node 26 tại commit `b73ac15`: typecheck/build đạt, 84/84 tests đạt; tarball cài vào TEMP độc lập chạy được CLI, doctor, dashboard/assets, schemas và fixture planner → worker → review → integration. Không gọi model thật; runtime đã dừng và thư mục cài thử được dọn. CI Windows/Ubuntu × Node 24/26 xanh (run 40957527058).
+Kiểm chứng local Windows Node 26: typecheck/build đạt, 90/90 tests đạt; tarball cài vào TEMP độc lập chạy được CLI, doctor, dashboard/assets, schemas và fixture planner → worker → review → integration. Không gọi model thật; runtime đã dừng và thư mục cài thử được dọn. CI Windows/Ubuntu × Node 24/26 xanh (run 40957527058 cho `b73ac15`).
 
 Phase 8 đã triển khai recovery và vòng sửa có ngân sách, live manager 9router + hai worker agy đạt với ngoại lệ quyền được duyệt riêng. UI đã nghiệm thu trên runtime fixture ngày 2026-10-29; CI Windows/Ubuntu Node 24/26 đạt tại commit `4b99c39`. Xem [kiểm chứng Phase 8](PHASE8-VALIDATION.md).
 
@@ -113,7 +113,8 @@ Phase 8 đã triển khai recovery và vòng sửa có ngân sách, live manager
 2. Approval Phase 7 có thêm lựa chọn **Quyền Antigravity**: mặc định sandbox, hoặc toàn quyền (`--dangerously-skip-permissions`) do người dùng chọn trước khi phiên bắt đầu. Lựa chọn lưu trong `Approval.antigravityFullAccess`, chỉ áp cho worker Antigravity, muốn đổi phải tạo revision mới. Chỉ nên bật với repo tin cậy và tác vụ có biên rõ.
 3. Plan bị từ chối quyền vào trạng thái `waiting_permission` thay vì `failed`: task về `blocked`, vòng làm việc không bị trừ, nút **Đã cấp quyền, tiếp tục** gọi `resume`. Chi tiết trong `tests/permission.test.mjs`.
 4. Benchmark tải/log và tài khoản thực tế trước khi nâng capacity trên 4.
-5. Trước tác vụ dài không giám sát: `worker-host` tự thoát khi runtime chết (`taskkill /T /F`, có watchdog 1 giây vì kênh IPC Windows có thể còn mở sau SIGKILL; test trong `tests/runtime.test.mjs`), nhưng tiến trình cháu không nằm trong cây đó. Windows Job Object vẫn cần cho containment đầy đủ.
-6. Bổ sung giao thức waiting_input khi có adapter tương tác.
+5. Logic hiển thị của tab kế hoạch đã tách sang `src/core/planview.ts` (nhãn trạng thái, nút cho từng trạng thái, quyền sửa đề xuất, quyền tích hợp, ngân sách còn lại) và có test trong `tests/planview.test.mjs`. Component React chưa render trong test; thêm test DOM khi UI có hành vi cục bộ phức tạp hơn.
+6. Trước tác vụ dài không giám sát: `worker-host` tự thoát khi runtime chết (`taskkill /T /F`, có watchdog 1 giây vì kênh IPC Windows có thể còn mở sau SIGKILL; test trong `tests/runtime.test.mjs`), nhưng tiến trình cháu không nằm trong cây đó. Windows Job Object vẫn cần cho containment đầy đủ.
+7. Bổ sung giao thức waiting_input khi có adapter tương tác.
 
 Không cam kết lịch theo ngày trước spike M2: độ ổn định adapter và vòng đời tiến trình Windows là hai yếu tố chưa được đo đủ.

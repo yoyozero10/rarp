@@ -8,7 +8,7 @@ Có gói cài đặt `.tgz` và lệnh `rarp doctor` để kiểm tra môi trư�
 
 Phase 8 đã triển khai khôi phục plan dừng, giữ task không đổi qua revision, ngân sách sửa/retry bền vững và kiểm tra toàn bộ checkout trước `completed`. Live manager `9router` với hai worker agy đã đạt trong repo TEMP, dùng ngoại lệ quyền được duyệt riêng. UI đã nghiệm thu trên runtime fixture; CI Windows/Ubuntu với Node 24/26 đạt tại commit `4b99c39`. Xem [kiểm chứng Phase 8](docs/PHASE8-VALIDATION.md).
 
-Bản nền Phase 8: 84/84 test, CI xanh. Công cụ tự host cho một người dùng trên một máy: chưa publish npm, `waiting_permission` đã có (plan chờ cấp quyền rồi `resume`), còn thiếu `waiting_input` và job object Windows, chỉ nghe `127.0.0.1`, UI chưa có test tự động. Antigravity headless vẫn cần allow-rule trong `~/.gemini/antigravity-cli/settings.json` hoặc bật **toàn quyền** ở bước duyệt. Chi tiết và thứ tự ưu tiên ở [kế hoạch](docs/PLAN.md).
+Bản nền Phase 8: 90/90 test, CI xanh. Công cụ tự host cho một người dùng trên một máy: chưa publish npm, `waiting_permission` đã có (plan chờ cấp quyền rồi `resume`), còn thiếu `waiting_input` và job object Windows, chỉ nghe `127.0.0.1`. Logic hiển thị của UI đã tách sang `src/core/planview.ts` và có test; component React chưa render trong test. Antigravity headless vẫn cần allow-rule trong `~/.gemini/antigravity-cli/settings.json` hoặc bật **toàn quyền** ở bước duyệt. Chi tiết và thứ tự ưu tiên ở [kế hoạch](docs/PLAN.md).
 
 ## Đóng gói và cài đặt
 
