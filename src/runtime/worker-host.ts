@@ -3,6 +3,27 @@ import type { CommandSpec } from "../adapters/codex.js";
 
 // Keep this parent alive after the CLI exits so tree cleanup still has a live root.
 const keepAlive = setInterval(() => {}, 1000);
+function killTree() {
+  if (process.platform === "win32")
+    spawn("taskkill", ["/PID", String(process.pid), "/T", "/F"], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+  else {
+    try {
+      process.kill(-process.pid, "SIGKILL");
+    } catch {
+      clearInterval(keepAlive);
+      process.exit(1);
+    }
+  }
+}
+// shortcut: a SIGKILLed runtime can leave the IPC channel open on Windows, so
+// poll the parent link instead of relying on "disconnect" alone.
+const watchdog = setInterval(() => {
+  if (!process.connected) killTree();
+}, 1000);
+watchdog.unref();
 process.once(
   "message",
   (message: { command: CommandSpec; root: string; prompt: string }) => {
@@ -33,17 +54,5 @@ process.once(
 );
 process.on("disconnect", () => {
   // Best effort cleanup if the runtime disappears; recovery refuses a live host.
-  if (process.platform === "win32")
-    spawn("taskkill", ["/PID", String(process.pid), "/T", "/F"], {
-      windowsHide: true,
-      stdio: "ignore",
-    });
-  else {
-    try {
-      process.kill(-process.pid, "SIGKILL");
-    } catch {
-      clearInterval(keepAlive);
-      process.exit(1);
-    }
-  }
+  killTree();
 });

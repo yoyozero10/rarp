@@ -337,7 +337,7 @@ export function createScheduler(
           if(stopping || store.plan(id).status!=='executing')return;
           const reason=result.reason==='cancelled'?'human':classifyFailure(result.note,'verification'),usage=store.taskUsage(task.id);
           if(reason==='human'){store.planState(id,'paused','Final verification cancelled','human');return;}
-          if(reason==='configuration' || usage.rounds>=planBudget(p).maxRounds || Date.now()>=deadline) {store.planState(id,'paused',result.note,reason==='configuration'?reason:'budget');return;}
+          if(reason==='configuration' || reason==='permission' || usage.rounds>=planBudget(p).maxRounds || Date.now()>=deadline) {store.planState(id,'paused',result.note,reason==='configuration'||reason==='permission'?reason:'budget');return;}
           const fresh=prepareWorkspace(root,task.id,ws.scope,ws.check,'-repair-'+randomBytes(6).toString('hex'));
           store.repairAccepted(task.id,fresh,'Final verification failed: '+result.note);return;
         }

@@ -65,8 +65,12 @@ export class AntigravityStream {
         Array.isArray(result?.denied_actions) &&
         result.denied_actions.length
       ) {
+        // Denied actions pause the plan instead of failing the task; the list tells the
+        // human which allow-rule to add or to approve full access.
         this.failureReason =
-          "Antigravity tool permissions denied; configure permissions before retrying";
+          "Antigravity tool permissions denied: " +
+          result.denied_actions.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(", ").slice(0, 18000) +
+          "\nAdd an allow rule to permissions.allow in ~/.gemini/antigravity-cli/settings.json, trust the workspace, or approve a revision with antigravityFullAccess.";
         this.parser.feed('{"type":"turn.failed"}\n');
         return;
       }

@@ -1,5 +1,9 @@
 import {writeFileSync} from 'node:fs';
 if (process.argv.includes('--antigravity')) {
+  if (process.argv.includes('--deny') && !process.env.RARP_FIXTURE_ALLOW) {
+    console.log(JSON.stringify({event:'result',result:{status:'FAILED',denied_actions:['command(node -e ...)']}}));
+    process.exit(0);
+  }
   const input = process.argv.at(-1);
   const scope = JSON.parse(input.match(/FILE_SCOPE (\[[^\n]+\])/)[1]);
   writeFileSync(scope[0], 'done');

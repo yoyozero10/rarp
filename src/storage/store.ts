@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { goalSchema, approvalSchema, validateProposal, hash, planBudget, remainingTime } from "../core/plan.js";
+import { goalSchema, approvalSchema, validateProposal, hash, planBudget, remainingTime, planStatusFor } from "../core/plan.js";
 import type { Goal, Plan, Approval, StopReason, TaskUsage, Execution } from "../core/plan.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, existsSync } from "node:fs";
@@ -134,7 +134,7 @@ export class Store {
     });
   }
   planSnapshot(id: string,snapshot: {baseHead:string;fingerprint:string}) { this.transaction(()=>{const p=this.plan(id);p.executionSnapshot=snapshot;this.writePlan(p);}); }
-  planState(id: string,status: string,note?: string,reason?: StopReason) { return this.transaction(()=>{ const p=this.plan(id); if(status!=='executing' && p.execution?.startedAt){p.execution.elapsedMs=(p.execution.elapsedMs??0)+Date.now()-p.execution.startedAt;delete p.execution.startedAt;} p.status=status; if(note!==undefined)p.note=note; else delete p.note; if(reason)p.stopReason=reason;else delete p.stopReason; this.writePlan(p); return p; }); }
+  planState(id: string,status: string,note?: string,reason?: StopReason) { return this.transaction(()=>{ const p=this.plan(id); if(status!=='executing' && p.execution?.startedAt){p.execution.elapsedMs=(p.execution.elapsedMs??0)+Date.now()-p.execution.startedAt;delete p.execution.startedAt;} p.status=status==='paused'?planStatusFor(reason):status; if(note!==undefined)p.note=note; else delete p.note; if(reason)p.stopReason=reason;else delete p.stopReason; this.writePlan(p); return p; }); }
   private execution(p: Plan): Execution {
     return p.execution ??= {tasks:Object.fromEntries(this.planLinks(p.id).map(l=>[l.taskId,{rounds:this.show(l.taskId).attempts.length,retries:0}]))};
   }
@@ -162,7 +162,7 @@ export class Store {
     });
   }
   retryPlan(id: string) {
-    return this.transaction(()=>{const p=this.plan(id);if(!p.approval || !['paused','executing'].includes(p.status))throw new Error('Approved execution required');
+    return this.transaction(()=>{const p=this.plan(id);if(!p.approval || !['paused','waiting_permission','executing'].includes(p.status))throw new Error('Approved execution required');
       const e=this.execution(p), budget=planBudget(p);
       if(remainingTime(p)<=0)throw new Error('Time budget exhausted; approve a larger budget in a new revision');
       for(const l of this.planLinks(id)) {
@@ -198,7 +198,7 @@ export class Store {
     const approval=approvalSchema.parse(input);
     return this.transaction(()=>{ const p=this.plan(id);
       if(p.revision!==approval.revision || p.contentHash!==approval.contentHash) throw new Error('Stale approval revision/hash');
-      if(p.approval && hash(p.approval)===hash(approval) && ['executing','paused','completed'].includes(p.status)) { if(hash(p.bindings??{})!==hash(bindings)) throw new Error('Approved profile configuration changed'); return p; }
+      if(p.approval && hash(p.approval)===hash(approval) && ['executing','paused','waiting_permission','completed'].includes(p.status)) { if(hash(p.bindings??{})!==hash(bindings)) throw new Error('Approved profile configuration changed'); return p; }
       if(p.status!=='awaiting_approval' || !p.proposal || p.proposal.questions.length) throw new Error('Plan is not awaiting approval');
       if(p.baseHead!==baseHead || p.fingerprint!==fingerprint) throw new Error('Repository stale; analyze again');
       const refs=new Set(approval.workers.map(w=>w.workerRef)); if(refs.size!==approval.workers.length || refs.size!==p.proposal.workers.length || p.proposal.workers.some(w=>!refs.has(w.workerRef))) throw new Error('Worker binding mismatch');
