@@ -8,7 +8,7 @@ import type { Dispatch, DispatchInput } from "../core/dispatch.js";
 import type { Store } from "../storage/store.js";
 import type { CommandSpec } from "../adapters/codex.js";
 import { codexReviewCommand } from "../adapters/codex.js";
-import { antigravityCommand } from "../adapters/antigravity.js";
+import { antigravityCommand, withFullAccess } from "../adapters/antigravity.js";
 import { runWorker } from "./process.js";
 import { runWorkflow } from "./workflow.js";
 import { classifyFailure } from './workflow.js';
@@ -204,7 +204,10 @@ export function createScheduler(
       const attemptId = String(running.attempts.at(-1)!["id"]),
         id = runId;
       const selected = input.executionId
-        ? profileCommand(adapters, command, input.adapter, input.profile)
+        ? withFullAccess(
+            profileCommand(adapters, command, input.adapter, input.profile),
+            store.plan(input.executionId).approval?.antigravityFullAccess === true,
+          )
         : input.adapter === "antigravity"
           ? (adapters.antigravity ?? antigravityCommand())
           : command;

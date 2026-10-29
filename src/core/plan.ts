@@ -42,6 +42,7 @@ export const approvalSchema = z.object({
   actor: z.literal("human"), maxWorkers: z.number().int().min(1).max(16), maxReviewers: z.number().int().min(1).max(16),
   workers: z.array(z.object({ workerRef: key, adapter: z.enum(["codex", "antigravity"]), profile: key }).strict()).min(1).max(16),
   integration: z.enum(["reviewed-local", "manual"]),
+  antigravityFullAccess: z.boolean().default(false),
   budget: budgetSchema.optional(),
 }).strict();
 export type Approval = z.infer<typeof approvalSchema>;

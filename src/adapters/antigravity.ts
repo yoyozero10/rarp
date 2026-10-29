@@ -1,5 +1,13 @@
 import { CodexStream } from "./codex.js";
 import type { CommandSpec } from "./codex.js";
+export const ANTIGRAVITY_FULL_ACCESS = "--dangerously-skip-permissions";
+export function withFullAccess(command: CommandSpec, enabled: boolean): CommandSpec {
+  if (!enabled || command.protocol !== "antigravity") return command;
+  const args = [...command.args];
+  const print = args.indexOf("--print");
+  args.splice(print >= 0 ? print : args.length, 0, ANTIGRAVITY_FULL_ACCESS);
+  return { ...command, args };
+}
 export function antigravityCommand(file = "agy"): CommandSpec {
   return {
     file,

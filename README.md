@@ -25,7 +25,7 @@ Phase 7 đã đóng nghiệm thu 2026-10-25: 59/59 tests, CI Windows/Linux và l
 
 Dashboard mở tab **Mục tiêu & kế hoạch**. Nhập mục tiêu, yêu cầu, tiêu chí nghiệm thu và giới hạn worker; lưu rồi yêu cầu phân tích read-only. Planner không được chạy build/test hoặc worker triển khai trước approval.
 
-Xem đề xuất, scope, dependency, wave, argv kiểm thử và chính sách review. Trả lời câu hỏi chưa rõ hoặc sửa JSON để tạo revision mới. Chọn Codex/Antigravity và profile riêng cho từng worker, giới hạn slot/reviewer, chính sách tích hợp; xác nhận rồi bấm **Duyệt và chạy**. Runtime kiểm tra revision/hash và trạng thái repository; CLI/profile không có sẽ báo lỗi, không fallback. Đóng hoặc reload trang không đồng nghĩa duyệt.
+Xem đề xuất, scope, dependency, wave, argv kiểm thử và chính sách review. Trả lời câu hỏi chưa rõ hoặc sửa JSON để tạo revision mới. Chọn Codex/Antigravity và profile riêng cho từng worker, giới hạn slot/reviewer, chính sách tích hợp; xác nhận rồi bấm **Duyệt và chạy**. Ô **Quyền Antigravity** chỉ có hiệu lực khi worker dùng Antigravity: mặc định giữ sandbox, chọn *toàn quyền* thì approval ghi `antigravityFullAccess` và lượt giao việc thêm `--dangerously-skip-permissions`; Codex không bị ảnh hưởng, đổi lựa chọn cần revision mới. Runtime kiểm tra revision/hash và trạng thái repository; CLI/profile không có sẽ báo lỗi, không fallback. Đóng hoặc reload trang không đồng nghĩa duyệt.
 
 Kế hoạch lưu trong SQLite; draft nhập liệu và binding chưa duyệt giữ ở trình duyệt. Tạm dừng chỉ chặn lượt giao việc mới của kế hoạch; hủy chỉ tác động các task liên quan. Tích hợp `reviewed-local` không push/deploy; `manual` cần thao tác tích hợp riêng trước khi dependency tiếp tục.
 
