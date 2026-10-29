@@ -34,6 +34,7 @@ Nghiệm thu UI 2026-10-29 trên runtime fixture tạm (`rarp-phase8-ui-DG0FSZ`,
 
 Kết quả đạt:
 
+- CI run [40909156101](https://github.com/yoyozero10/rarp/actions/runs/40909156101) tại commit `4b99c39`: 4/4 job đạt (Windows và Ubuntu, Node 24 và 26).
 - Hai task accepted và integrated, mỗi task một lượt làm, không retry.
 - `backend.txt`, `frontend.txt` đúng bytes `[97,102,116,101,114,10]`; checkout sạch.
 - Cả hai check chạy lại trên checkout cuối và pass; elapsedMs: 135665.
@@ -41,4 +42,4 @@ Kết quả đạt:
 - Báo cáo: `C:\Users\User\AppData\Local\Temp\rarp-phase8-live-TiBGk7\.rarp\phase8-result.json`.
 - Runtime live đã dừng. Không chỉnh sửa hoặc tiếp tục OrderMatrix.
 
-Chưa kiểm chứng CI Linux trong lượt này. Không bảo đảm mọi lỗi đều tự sửa được; thay đổi phạm vi, hết ngân sách hoặc không tiến triển vẫn cần quyết định mới.
+Chưa kiểm chứng CI Linux trong lượt live; CI đạt sau đó tại commit `4b99c39`. Không bảo đảm mọi lỗi đều tự sửa được; thay đổi phạm vi, hết ngân sách hoặc không tiến triển vẫn cần quyết định mới.
