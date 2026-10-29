@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { fork } from "node:child_process";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
@@ -104,3 +105,21 @@ for (const operation of ["timeout", "cancel", "stop"])
       }
     });
   });
+
+test("worker host kills its CLI child when the parent runtime dies", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rarp-orphan-"));
+  const parent = fork(resolve("tests/fixtures/orphan-host.mjs"), [root], {
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+  await new Promise((done) => parent.once("message", done));
+  const pid = Number(readFileSync(join(root, "orphan.pid"), "utf8"));
+  process.kill(parent.pid, "SIGKILL");
+  await until(() => {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+});
