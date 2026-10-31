@@ -4,11 +4,13 @@ CLI điều phối nhiều AI agent trên máy local: lập kế hoạch, giao v
 
 ## Trạng thái
 
+Phase 9 `waiting_input` đã đóng nghiệm thu 2026-10-31: worker có thể trả `{"rarp_input":{"question":"Câu hỏi"}}` làm final response; plan giữ câu hỏi qua restart, UI/CLI cho trả lời rồi tiếp tục trong approval và ngân sách cũ. CLI: `rarp plan answer PLAN_ID --file answer.json` với `{taskId, requestId, answer}`, sau đó `rarp plan resume PLAN_ID`. Lượt hỏi vẫn tính một round; đây là prompt mới, không nối lại phiên tương tác. Input 3/3, browser fixture và ma trận runner cục bộ Windows/Ubuntu × Node 24/26 đạt; mỗi tổ hợp 93/93 test cùng package check. Source/hash đã đối chiếu; GitHub Actions hosted chưa chạy. Xem [kiểm chứng Phase 9](docs/PHASE9-VALIDATION.md).
+
 Có gói cài đặt `.tgz` và lệnh `rarp doctor` để kiểm tra môi trường trước khi chạy. Gói chứa CLI/runtime đã build, dashboard, JSON schemas và tài liệu; máy nhận chỉ cần Node.js >=24, npm, Git và CLI agent muốn dùng. Chưa phát hành lên npm registry; `private: true` vẫn chặn publish ngoài ý muốn.
 
 Phase 8 đã triển khai khôi phục plan dừng, giữ task không đổi qua revision, ngân sách sửa/retry bền vững và kiểm tra toàn bộ checkout trước `completed`. Live manager `9router` với hai worker agy đã đạt trong repo TEMP, dùng ngoại lệ quyền được duyệt riêng. UI đã nghiệm thu trên runtime fixture; CI Windows/Ubuntu với Node 24/26 đạt tại commit `4b99c39`. Xem [kiểm chứng Phase 8](docs/PHASE8-VALIDATION.md).
 
-Bản nền Phase 8: 90/90 test, CI xanh. Công cụ tự host cho một người dùng trên một máy: chưa publish npm, `waiting_permission` đã có (plan chờ cấp quyền rồi `resume`), còn thiếu `waiting_input` và job object Windows, chỉ nghe `127.0.0.1`. Logic hiển thị của UI đã tách sang `src/core/planview.ts` và có test; component React chưa render trong test. Antigravity headless vẫn cần allow-rule trong `~/.gemini/antigravity-cli/settings.json` hoặc bật **toàn quyền** ở bước duyệt. Chi tiết và thứ tự ưu tiên ở [kế hoạch](docs/PLAN.md).
+Bản nền Phase 8: 90/90 test, CI xanh. Công cụ tự host cho một người dùng trên một máy: chưa publish npm, `waiting_permission` và `waiting_input` đã có, job object Windows còn thiếu, chỉ nghe `127.0.0.1`. Logic hiển thị của UI đã tách sang `src/core/planview.ts` và có test; Phase 9 đã kiểm chứng component React bằng DOM harness riêng và nghiệm thu browser fixture. Antigravity headless vẫn cần allow-rule trong `~/.gemini/antigravity-cli/settings.json` hoặc bật **toàn quyền** ở bước duyệt. Chi tiết và thứ tự ưu tiên ở [kế hoạch](docs/PLAN.md).
 
 ## Đóng gói và cài đặt
 

@@ -82,7 +82,7 @@ goal.command('show <id>').action(async(id:string)=>console.log(JSON.stringify(aw
 const plan = program.command('plan').description('Inspect, revise and explicitly approve plans');
 plan.command('list').action(async()=>console.log(JSON.stringify(await runtimeRequest(program.opts()['project'] as string,'plans'),null,2)));
 plan.command('show <id>').action(async(id:string)=>console.log(JSON.stringify(await runtimeRequest(program.opts()['project'] as string,'plans/'+id),null,2)));
-for(const action of ['update','analyze','approve','reject','cancel','pause','resume']) plan.command(action+' <id>').option('--file <path>','Request JSON file').action(async(id:string,options:{file?:string})=>console.log(JSON.stringify(await runtimeRequest(program.opts()['project'] as string,'plans/'+id+'/'+action,options.file?JSON.parse(readFileSync(options.file,'utf8')):{}),null,2)));
+for(const action of ['update','analyze','approve','reject','cancel','pause','resume','answer']) plan.command(action+' <id>').option('--file <path>','Request JSON file').action(async(id:string,options:{file?:string})=>console.log(JSON.stringify(await runtimeRequest(program.opts()['project'] as string,'plans/'+id+'/'+action,options.file?JSON.parse(readFileSync(options.file,'utf8')):{}),null,2)));
 const task = program.command("task").description("Manage tasks");
 task
   .command("create")

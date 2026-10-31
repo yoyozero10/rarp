@@ -103,6 +103,8 @@ Trạng thái: đã triển khai 2026-10-28, nghiệm thu UI và CI Windows/Ubun
 
 ## Việc tiếp theo
 
+Phase 9 đã đóng nghiệm thu 2026-10-31: giao thức final-response `rarp_input`, câu hỏi/câu trả lời bền vững, `waiting_input`, API/CLI/UI trả lời rồi resume trong approval/ngân sách cũ. Đã sửa stale answer qua attempt và hiển thị answer đã lưu. Input 3/3 và browser runtime fixture đạt đến accepted/integrated/final verification. Ma trận runner cục bộ Windows 11/Ubuntu 24.04 × Node 24.22.2/26.13.0 đạt cả bốn tổ hợp: npm ci/typecheck/test/package exit 0, mỗi tổ hợp 93/93 test. Agent đã xác minh bundle, 84 hash snapshot và 15 mục artifact; implementation/config/tests khớp workspace. Đây không phải GitHub Actions hoặc chứng nhận image hosted; roadmap không có gate hosted riêng. Không push/publish/deploy. Xem [PHASE9-VALIDATION.md](PHASE9-VALIDATION.md). Windows Job Object còn trong backlog cho containment đầy đủ trước tác vụ dài không giám sát; không phải gate riêng của `waiting_input`.
+
 Bước sau Phase 8 (2026-10-30): triển khai `rarp doctor` chỉ đọc, tarball npm với danh sách file cho phép, `prepack` build và kiểm thử cài gói độc lập bằng production dependencies. Thêm kiểm thử gói vào CI Windows/Ubuntu × Node 24/26. Chưa publish npm registry; giữ `private: true` cho đến khi chốt tên gói và chính sách phát hành. `waiting_permission` đã xong; `waiting_input` và Windows Job Object vẫn là phạm vi tiếp theo.
 
 Kiểm chứng local Windows Node 26: typecheck/build đạt, 90/90 tests đạt; tarball cài vào TEMP độc lập chạy được CLI, doctor, dashboard/assets, schemas và fixture planner → worker → review → integration. Không gọi model thật; runtime đã dừng và thư mục cài thử được dọn. CI Windows/Ubuntu × Node 24/26 xanh (run 40957527058 cho `b73ac15`).
@@ -115,6 +117,6 @@ Phase 8 đã triển khai recovery và vòng sửa có ngân sách, live manager
 4. Benchmark tải/log và tài khoản thực tế trước khi nâng capacity trên 4.
 5. Logic hiển thị của tab kế hoạch đã tách sang `src/core/planview.ts` (nhãn trạng thái, nút cho từng trạng thái, quyền sửa đề xuất, quyền tích hợp, ngân sách còn lại) và có test trong `tests/planview.test.mjs`. Component React chưa render trong test; thêm test DOM khi UI có hành vi cục bộ phức tạp hơn.
 6. Trước tác vụ dài không giám sát: `worker-host` tự thoát khi runtime chết (`taskkill /T /F`, có watchdog 1 giây vì kênh IPC Windows có thể còn mở sau SIGKILL; test trong `tests/runtime.test.mjs`), nhưng tiến trình cháu không nằm trong cây đó. Windows Job Object vẫn cần cho containment đầy đủ.
-7. Bổ sung giao thức waiting_input khi có adapter tương tác.
+7. Giao thức final-response `waiting_input` đã đóng nghiệm thu Phase 9; tương tác stdin và nối lại phiên model vẫn chưa hỗ trợ.
 
 Không cam kết lịch theo ngày trước spike M2: độ ổn định adapter và vòng đời tiến trình Windows là hai yếu tố chưa được đo đủ.

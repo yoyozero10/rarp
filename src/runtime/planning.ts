@@ -5,7 +5,7 @@ import { z } from "zod";
 import { codexPlannerCommand, codexReviewCommand } from "../adapters/codex.js";
 import type { CommandSpec } from "../adapters/codex.js";
 import { antigravityCommand, withFullAccess } from "../adapters/antigravity.js";
-import { hash, waves, approvalSchema, planBudget, remainingTime } from "../core/plan.js";
+import { hash, waves, approvalSchema, planBudget, remainingTime, inputAnswerSchema } from "../core/plan.js";
 import type { Store } from "../storage/store.js";
 import { runWorker } from "./process.js";
 
@@ -56,6 +56,7 @@ export function createPlanning(store:Store,root:string,scheduler: {snapshot:()=>
     finally { analyses.delete(id); }
   }
   return {detail, analyze,
+    answer(id:string,body:unknown) { store.answerPlanInput(id,inputAnswerSchema.parse(body));return detail(id); },
     profiles() { const configured=Object.entries(adapters.profiles??{}).map(([id,p])=>({id,adapter:p.adapter,profile:id.slice(id.indexOf(':')+1),model:p.model,available:available(p.command.file),authenticated:p.authenticated,supported:true})); return {profiles:[{id:'codex:default',adapter:'codex',profile:'default',model:'CLI default',available:available(command.file),authenticated:null,supported:true},{id:'antigravity:default',adapter:'antigravity',profile:'default',model:null,available:!!adapters.antigravity && available(adapters.antigravity.file),authenticated:null,supported:!!adapters.antigravity},...configured].filter((p,i,all)=>all.findLastIndex(x=>x.id===p.id)===i),planner:{adapter:'codex',readOnly:true,profile:cliProfile(adapters.planner)},reviewer:{adapter:'codex',separate:true,profile:cliProfile(adapters.manager)}}; },
     update(id:string,body:unknown) { const input=z.object({revision:z.number().int().nonnegative(),proposal:z.unknown()}).strict().parse(body); if(analyses.has(id)) throw new Error('Analysis active'); const snap=repositorySnapshot(root); store.updatePlan(id,input.revision,input.proposal,snap.baseHead,snap.fingerprint); return detail(id); },
     approve(id:string,body:unknown) { const input=approvalSchema.parse(body), capacity=scheduler.snapshot().limits;
@@ -72,7 +73,7 @@ export function createPlanning(store:Store,root:string,scheduler: {snapshot:()=>
     async control(id:string,action:string) { const p=store.plan(id); if(action==='cancel') { store.planState(id,'cancelled'); await analyses.get(id)?.cancel(); for(const l of store.planLinks(id)) { try { await scheduler.cancel(l.taskId); } catch(error) { const d=store.dispatches().find(d=>d.taskId===l.taskId && ['active','waiting'].includes(d.state)); if(d) throw error; } } }
       else if(action==='reject') { if(!['awaiting_approval','needs_clarification','received','failed'].includes(p.status)) throw new Error('Plan cannot be rejected'); store.planState(id,'rejected'); }
       else if(action==='pause') { if(p.status!=='executing') throw new Error('Plan not executing'); store.planState(id,'paused','Human pause','human'); for(const link of store.planLinks(id)) if(store.runs().some(r=>r['task_id']===link.taskId && r['state']==='active'))await scheduler.cancel(link.taskId); }
-      else if(action==='resume') { if(p.status==='executing')return detail(id);if(!['paused','waiting_permission'].includes(p.status) || !p.approval) throw new Error('Approved paused execution required'); const snap=repositorySnapshot(root), expected=p.executionSnapshot??p; if(snap.baseHead!==expected.baseHead || snap.fingerprint!==expected.fingerprint) throw new Error('Repository stale; revise and approve again'); for(const w of p.approval.workers) {const selected=profileCommand(adapters,command,w.adapter,w.profile);if(!available(selected.file) || p.bindings?.[w.workerRef]!==hash(selected)) throw new Error('Profile changed or unavailable; revise and approve again');} store.retryPlan(id); }
+      else if(action==='resume') { if(p.status==='executing')return detail(id);if(!['paused','waiting_permission','waiting_input'].includes(p.status) || !p.approval) throw new Error('Approved paused execution required'); const snap=repositorySnapshot(root), expected=p.executionSnapshot??p; if(snap.baseHead!==expected.baseHead || snap.fingerprint!==expected.fingerprint) throw new Error('Repository stale; revise and approve again'); for(const w of p.approval.workers) {const selected=profileCommand(adapters,command,w.adapter,w.profile);if(!available(selected.file) || p.bindings?.[w.workerRef]!==hash(selected)) throw new Error('Profile changed or unavailable; revise and approve again');} store.retryPlan(id); }
       else throw new Error('Unknown action'); return detail(id);
     },
     async shutdown() { await Promise.all([...analyses.values()].map(a=>a.cancel())); }
