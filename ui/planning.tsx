@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { api } from "./client";
 import type { Goal, Plan, Proposal, Approval, Budget, TaskUsage } from "../src/core/plan";
 import { planLabel, planActions, planEditable, planRemaining, planCanIntegrate, planActionLabel } from "../src/core/planview";
+import { DependencyGraph } from "./components/DependencyGraph";
+import { InputModal } from "./components/InputModal";
+import { PermissionAlert } from "./components/PermissionAlert";
 
 type Profile = { id:string; adapter:string; profile:string; model:string|null; available:boolean; supported:boolean; authenticated:boolean|null };
 type Detail = Plan & { budget: Budget|null; remainingMs:number|null; waves: string[][]; history: unknown[]; tasks: { stepKey: string; taskId: string; task: {status:string; title:string; reviews:{feedback:string}[]}; usage:TaskUsage; workspace?: {integrated:boolean} }[]; logs: unknown[] };
@@ -13,16 +16,18 @@ function InputAnswer({input,busy,save}:{input:NonNullable<TaskUsage['input']>;bu
     {input.answer===undefined?<button disabled={busy||!answer.trim()}>Lưu câu trả lời</button>:<p>Đã lưu câu trả lời. Bấm Tiếp tục kế hoạch sau khi trả lời đủ câu hỏi.</p>}
   </form>;
 }
-export function Planning({ maxWorkers, maxReviewers, eventId }: { maxWorkers:number; maxReviewers:number; eventId:number }) {
+export function Planning({ maxWorkers, maxReviewers, eventId, onSelectTask }: { maxWorkers:number; maxReviewers:number; eventId:number; onSelectTask?: (id:string)=>void }) {
   const [plans,setPlans]=useState<Plan[]>([]), [goals,setGoals]=useState<Goal[]>([]), [id,setId]=useState(sessionStorage.getItem("rarp-plan")??""), [detail,setDetail]=useState<Detail|null>(null);
   const [title,setTitle]=useState(localStorage.getItem("rarp-goal-title")??""), [requirements,setRequirements]=useState(localStorage.getItem("rarp-goal-requirements")??""), [acceptance,setAcceptance]=useState(localStorage.getItem("rarp-goal-acceptance")??""), [limit,setLimit]=useState(Math.min(4,maxWorkers));
   const [busy,setBusy]=useState(false),[error,setError]=useState(""),[edit,setEdit]=useState(""),[clarification,setClarification]=useState(""),[bindings,setBindings]=useState<Approval["workers"]>([]),[slots,setSlots]=useState(1),[reviewers,setReviewers]=useState(1),[integration,setIntegration]=useState<Approval["integration"]>("reviewed-local"),[confirm,setConfirm]=useState(false),[fullAccess,setFullAccess]=useState(false);
   const [budget,setBudget]=useState<Budget>({maxRounds:3,maxRetries:2,timeoutMs:120000,totalTimeoutMs:600000});
   const [profiles,setProfiles]=useState<Profile[]>([]);
   const [managerProfile,setManagerProfile]=useState<string|null>(null);
+  const [modalTask, setModalTask] = useState<{ taskId: string; title: string; stepKey?: string; input: NonNullable<TaskUsage['input']> } | null>(null);
+
   async function refresh() { const [p,g,available]=await Promise.all([api<{plans:Plan[]}>("plans"),api<{goals:Goal[]}>("goals"),api<{profiles:Profile[];reviewer:{profile:string|null}}>("profiles")]);setPlans(p.plans);setGoals(g.goals);setProfiles(available.profiles);setManagerProfile(available.reviewer.profile);if(id)setDetail(await api<Detail>("plans/"+encodeURIComponent(id))); }
   useEffect(()=>{void refresh().catch(e=>setError(String(e)));},[id,eventId]);
-  useEffect(()=>{sessionStorage.setItem("rarp-plan",id);setDetail(null);setEdit("");setConfirm(false);},[id]);
+  useEffect(()=>{sessionStorage.setItem("rarp-plan",id);setDetail(null);setEdit("");setConfirm(false);setModalTask(null);},[id]);
   useEffect(()=>{if(!detail || detail.status!=="awaiting_approval")return;localStorage.setItem(`rarp-bindings-${detail.id}-${detail.revision}`,JSON.stringify(bindings));},[bindings]);
   useEffect(()=>{localStorage.setItem("rarp-goal-title",title);localStorage.setItem("rarp-goal-requirements",requirements);localStorage.setItem("rarp-goal-acceptance",acceptance);},[title,requirements,acceptance]);
   useEffect(()=>{const p=detail?.proposal;if(!p)return;let saved: Approval["workers"] | undefined;try{const value:unknown=JSON.parse(localStorage.getItem(`rarp-bindings-${detail.id}-${detail.revision}`)??"null");if(Array.isArray(value)&&value.length===p.workers.length&&value.every((w,i)=>w?.workerRef===p.workers[i]?.workerRef&&["codex","antigravity"].includes(w.adapter)&&typeof w.profile==="string"))saved=value;}catch{}setBindings(detail.approval?.workers??saved??p.workers.map(w=>({workerRef:w.workerRef,adapter:"codex",profile:"default"})));setSlots(detail.approval?.maxWorkers??p.maxWorkers);setReviewers(detail.approval?.maxReviewers??1);setIntegration(detail.approval?.integration??"reviewed-local");setFullAccess(detail.approval?.antigravityFullAccess??false);setBudget(detail.approval?.budget??{...p.policy,maxRetries:p.policy.maxRetries??2});setConfirm(false);},[detail?.id,detail?.revision]);
@@ -47,13 +52,62 @@ export function Planning({ maxWorkers, maxReviewers, eventId }: { maxWorkers:num
       {detail.note&&<p role="status">{detail.stopReason && <strong>{detail.stopReason}: </strong>}{detail.note}</p>}
       {detail.budget&&<p>Thời gian còn lại: {Math.ceil((detail.remainingMs??0)/1000)} giây. Chỉ hoàn tất sau tích hợp và kiểm tra toàn bộ.</p>}
       {detail.status==="paused"&&<p>Tiếp tục nếu còn ngân sách và cấu hình không đổi. Hết ngân sách, đổi phạm vi hoặc CLI/profile: lưu revision mới, duyệt lại. Conflict: kiểm tra workspace tích hợp trước khi thử lại.</p>}
-      {detail.status==="waiting_input"&&<p>Worker cần thông tin. Trả lời câu hỏi bên dưới rồi tiếp tục. Lượt hỏi vẫn tính vào ngân sách; thời gian chờ trả lời không tính. Câu trả lời không thay đổi phạm vi hoặc quyền đã duyệt.</p>}
-      {detail.status==="waiting_permission"&&<p>Worker bị từ chối quyền công cụ nên kế hoạch đang chờ, không tính là lượt hỏng. Thêm allow-rule vào <code>permissions.allow</code> của <code>~/.gemini/antigravity-cli/settings.json</code> (hoặc thêm repo vào <code>trustedWorkspaces</code>), rồi bấm tiếp tục. Muốn toàn quyền: lưu revision mới với <strong>Quyền Antigravity</strong> bật.</p>}
+      {detail.status==="waiting_input"&&<>
+        <p>Worker cần thông tin. Trả lời câu hỏi bên dưới rồi tiếp tục. Lượt hỏi vẫn tính vào ngân sách; thời gian chờ trả lời không tính. Câu trả lời không thay đổi phạm vi hoặc quyền đã duyệt.</p>
+        {(() => {
+          const waitingTask = detail.tasks.find(
+            (t) => t.task.status === "blocked" && t.usage.input && t.usage.input.answer === undefined
+          );
+          return waitingTask?.usage.input ? (
+            <div className="action-center-prompt">
+              <div>
+                <strong>Action Center: Cần trả lời câu hỏi của Worker</strong>
+                <p className="muted" style={{ margin: "2px 0 0" }}>
+                  Task <code>{waitingTask.stepKey || waitingTask.taskId}</code> đang chờ phản hồi để tiếp tục.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="primary open-modal-btn"
+                disabled={busy}
+                onClick={() =>
+                  setModalTask({
+                    taskId: waitingTask.taskId,
+                    title: waitingTask.task.title,
+                    stepKey: waitingTask.stepKey,
+                    input: waitingTask.usage.input!,
+                  })
+                }
+              >
+                Mở Action Center trả lời
+              </button>
+            </div>
+          ) : null;
+        })()}
+      </>}
+      {detail.status==="waiting_permission"&&<PermissionAlert note={detail.note} onResume={()=>control("resume")} busy={busy} />}
       {editable&&<><label>Làm rõ / yêu cầu lập lại<textarea value={clarification} onChange={e=>setClarification(e.target.value)}/></label><button disabled={busy} onClick={()=>void run(async()=>{setDetail(await api<Detail>(`plans/${id}/analyze`,{clarification}));})}>Phân tích read-only / lập lại</button></>}
       {proposal&&<>
         <h3>Đề xuất</h3><p>{proposal.understood}</p><p>{proposal.rationale}</p>
         <p>{proposal.steps.length} đầu việc · {proposal.workers.length} worker · {proposal.maxWorkers} slot · kích thước {proposal.size} · độ tin cậy {proposal.confidence}</p>
         <p>Wave: {detail.waves.map(w=>w.join(", ")).join(" → ")}</p>
+        <DependencyGraph
+          waves={detail.waves}
+          tasks={proposal.steps.map(s => {
+            const ex = detail.tasks.find(t => t.stepKey === s.key);
+            return {
+              id: s.key,
+              taskId: ex?.taskId,
+              title: s.title,
+              status: ex?.task.status ?? (detail.status === "approved" || detail.status === "executing" ? "queued" : "ready"),
+              dependencies: s.dependencies,
+              workerRef: s.workerRef,
+              scope: s.scope,
+              check: s.check,
+            };
+          })}
+          onSelectTask={onSelectTask}
+        />
         <h4>Giả định</h4><ul>{proposal.assumptions.map((s,i)=><li key={i}>{s}</li>)}</ul>
         {proposal.questions.length>0&&<><h4>Cần trả lời trước khi duyệt</h4><ul>{proposal.questions.map((s,i)=><li key={i}>{s}</li>)}</ul></>}
         {proposal.steps.map(s=><article className="plan-step" key={s.key}><h4>{s.key}: {s.title} · {s.workerRef}</h4><p>{s.requirements}</p><p>Đầu ra: {s.deliverable}</p><p>Phụ thuộc: {s.dependencies.join(", ")||"không"} · Scope: <code>{s.scope.join(", ")}</code></p><p>Kiểm thử argv: <code>{JSON.stringify(s.check)}</code></p><ul>{s.acceptance.map((a,i)=><li key={i}>{a}</li>)}</ul></article>)}
@@ -80,12 +134,54 @@ export function Planning({ maxWorkers, maxReviewers, eventId }: { maxWorkers:num
       {!!detail.tasks.length&&<><h3>Thực thi</h3><ul>{detail.tasks.map(t=><li key={t.taskId}>
         {t.task.title} · {t.task.status} · {t.workspace?.integrated?"đã tích hợp":"chưa tích hợp"} · Còn {planRemaining(t.usage.rounds,detail.budget?.maxRounds??0)} lượt làm, {planRemaining(t.usage.retries,detail.budget?.maxRetries??0)} retry
         {(t.usage.feedback??t.task.reviews.at(-1)?.feedback)&&<p>Feedback: {t.usage.feedback??t.task.reviews.at(-1)?.feedback}</p>}
-        {t.task.status==="blocked"&&t.usage.input&&["waiting_input","paused"].includes(detail.status)&&<InputAnswer key={t.usage.input.requestId} input={t.usage.input} busy={busy} save={answer=>void run(async()=>{setDetail(await api<Detail>(`plans/${id}/answer`,{taskId:t.taskId,requestId:t.usage.input!.requestId,answer}));})}/>}
+        {t.task.status==="blocked"&&t.usage.input&&["waiting_input","paused"].includes(detail.status)&&<div className="task-input-container">
+          <div style={{ margin: "6px 0" }}>
+            <button
+              type="button"
+              disabled={busy || t.usage.input.answer !== undefined}
+              onClick={() =>
+                setModalTask({
+                  taskId: t.taskId,
+                  title: t.task.title,
+                  stepKey: t.stepKey,
+                  input: t.usage.input!,
+                })
+              }
+            >
+              Mở Action Center trả lời (Modal)
+            </button>
+          </div>
+          <InputAnswer key={t.usage.input.requestId} input={t.usage.input} busy={busy} save={answer=>void run(async()=>{setDetail(await api<Detail>(`plans/${id}/answer`,{taskId:t.taskId,requestId:t.usage.input!.requestId,answer}));})}/>
+        </div>}
         {["failed","changes_requested","blocked"].includes(t.task.status)&&editable&&<button disabled={busy} onClick={()=>setEdit(JSON.stringify(proposal,null,2))}>Sửa task / xin duyệt revision</button>}
         {t.task.status==="accepted"&&!t.workspace?.integrated&&planCanIntegrate(detail.status)&&<button disabled={busy} onClick={()=>void run(async()=>{await api("integrate",{taskId:t.taskId,async:true});})}>Tích hợp task đã duyệt</button>}
       </li>)}</ul></>}
       {detail.history?.length>0&&<details><summary>Lịch sử revision (so sánh đề xuất cũ)</summary><pre>{JSON.stringify(detail.history,null,2)}</pre></details>}
       <details><summary>Nhật ký phân tích riêng</summary><pre>{JSON.stringify(detail.logs,null,2)}</pre></details>
+      {modalTask && (
+        <InputModal
+          isOpen={!!modalTask}
+          onClose={() => setModalTask(null)}
+          taskTitle={modalTask.title}
+          taskId={modalTask.taskId}
+          stepKey={modalTask.stepKey}
+          question={modalTask.input.question}
+          requestId={modalTask.input.requestId}
+          initialAnswer={modalTask.input.answer ?? ""}
+          busy={busy}
+          onSubmit={async (answer) => {
+            await run(async () => {
+              await api<Detail>(`plans/${id}/answer`, {
+                taskId: modalTask.taskId,
+                requestId: modalTask.input.requestId,
+                answer,
+              });
+              setDetail(await api<Detail>(`plans/${id}/resume`, {}));
+            });
+            setModalTask(null);
+          }}
+        />
+      )}
     </>}
   </section>;
 }

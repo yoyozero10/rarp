@@ -4,6 +4,8 @@ import { api, mergeEvents, setToken, stream } from "./client";
 import type { Row, Snapshot, Task, Workspace } from "./client";
 import "./style.css";
 import { Planning } from "./planning";
+import { DependencyGraph } from "./components/DependencyGraph";
+import { DiffViewer } from "./components/DiffViewer";
 const names: Record<string, string> = {
   queued: "Chờ chạy",
   running: "Đang làm",
@@ -344,7 +346,17 @@ function App() {
           </section>
         ) : (
           <>
-            {view === "planning" && <Planning maxWorkers={snapshot.runtime.limits.maxWorkers} maxReviewers={snapshot.runtime.limits.maxReviewers} eventId={snapshot.lastEventId} />}
+            {view === "planning" && (
+              <Planning
+                maxWorkers={snapshot.runtime.limits.maxWorkers}
+                maxReviewers={snapshot.runtime.limits.maxReviewers}
+                eventId={snapshot.lastEventId}
+                onSelectTask={(id) => {
+                  setSelected(id);
+                  setTab("overview");
+                }}
+              />
+            )}
             <div className="summary">
               <span>
                 <b>{snapshot.tasks.length}</b> task
@@ -529,6 +541,14 @@ function App() {
                     Task phụ thuộc cần được nghiệm thu; kết quả worktree cần
                     tích hợp trước khi chạy task tiếp.
                   </p>
+                  <DependencyGraph
+                    tasks={snapshot.tasks}
+                    selectedId={selected}
+                    onSelectTask={(id) => {
+                      setSelected(id);
+                      setTab("overview");
+                    }}
+                  />
                   {snapshot.tasks
                     .filter((t) => t.dependencies.length)
                     .map((t) => (
@@ -991,26 +1011,11 @@ function App() {
                     <pre>{task.workspace.integrationEvidence}</pre>
                   </details>
                 )}
-                <h3>Diff checkpoint</h3>
-                <p className="muted">{diff?.message ?? "Đang tải diff…"}</p>
-                <pre>{diff?.stat}</pre>
-                <pre className="diff">
-                  {diff?.diff.split("\n").map((line, i) => (
-                    <span
-                      key={i}
-                      className={
-                        line.startsWith("+")
-                          ? "addition"
-                          : line.startsWith("-")
-                            ? "deletion"
-                            : ""
-                      }
-                    >
-                      {line}
-                      {"\n"}
-                    </span>
-                  ))}
-                </pre>
+                <DiffViewer
+                  diff={diff?.diff ?? ""}
+                  stat={diff?.stat}
+                  message={diff?.message}
+                />
               </>
             )}
             {tab === "logs" && (
