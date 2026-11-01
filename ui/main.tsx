@@ -56,7 +56,7 @@ function App() {
     [note, setNote] = useState(""),
     [scope, setScope] = useState("src"),
     [check, setCheck] = useState('["node","--test"]'),
-    [adapter, setAdapter] = useState("codex");
+    [adapter, setAdapter] = useState("antigravity");
   const refresh = async () => {
     const data = await api<Snapshot>("snapshot");
     setSnapshot((old) =>

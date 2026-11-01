@@ -209,7 +209,7 @@ export function createScheduler(
             store.plan(input.executionId).approval?.antigravityFullAccess === true,
           )
         : input.adapter === "antigravity"
-          ? (adapters.antigravity ?? antigravityCommand())
+          ? withFullAccess(adapters.antigravity ?? antigravityCommand(), true)
           : command;
       const worker =
         dispatch.route === "workflow"
