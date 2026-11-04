@@ -1,270 +1,321 @@
 # Rarp
 
-CLI điều phối nhiều AI agent trên máy local: lập kế hoạch, giao việc, nhận kết quả, nghiệm thu và yêu cầu sửa. Stack: TypeScript + Node.js; SQLite cho dữ liệu bền vững. UI trực quan sẽ dùng cùng runtime.
+Hệ thống runtime và giao diện dòng lệnh (CLI) điều phối đa tác tử AI (Multi-Agent Orchestration) trên máy cục bộ. Rarp hỗ trợ lập kế hoạch theo mục tiêu, phân rã công việc, thực thi mã nguồn trong môi trường Git worktree cô lập, tự động kiểm thử, nghiệm thu kết quả và tích hợp an toàn vào nhánh chính.
 
-## Trạng thái
+---
 
-Phase 9 `waiting_input` đã đóng nghiệm thu 2026-10-31: worker có thể trả `{"rarp_input":{"question":"Câu hỏi"}}` làm final response; plan giữ câu hỏi qua restart, UI/CLI cho trả lời rồi tiếp tục trong approval và ngân sách cũ. CLI: `rarp plan answer PLAN_ID --file answer.json` với `{taskId, requestId, answer}`, sau đó `rarp plan resume PLAN_ID`. Lượt hỏi vẫn tính một round; đây là prompt mới, không nối lại phiên tương tác. Input 3/3, browser fixture và ma trận runner cục bộ Windows/Ubuntu × Node 24/26 đạt; mỗi tổ hợp 93/93 test cùng package check. Source/hash đã đối chiếu; GitHub Actions hosted chưa chạy. Xem [kiểm chứng Phase 9](docs/PHASE9-VALIDATION.md).
+## Mục lục
 
-Có gói cài đặt `.tgz` và lệnh `rarp doctor` để kiểm tra môi trường trước khi chạy. Gói chứa CLI/runtime đã build, dashboard, JSON schemas và tài liệu; máy nhận chỉ cần Node.js >=24, npm, Git và CLI agent muốn dùng. Chưa phát hành lên npm registry; `private: true` vẫn chặn publish ngoài ý muốn.
+- [Tổng quan kiến trúc](#tổng-quan-kiến-trúc)
+- [Tính năng cốt lõi](#tính-năng-cốt-lõi)
+- [Yêu cầu hệ thống](#yêu-cầu-hệ-thống)
+- [Cài đặt và Đóng gói](#cài-đặt-và-đóng-gói)
+- [Hướng dẫn sử dụng nhanh](#hướng-dẫn-sử-dụng-nhanh)
+- [Quy trình hoạt động chi tiết](#quy-trình-hoạt-động-chi-tiết)
+  - [Lập kế hoạch theo mục tiêu và phê duyệt](#1-lập-kế-hoạch-theo-mục-tiêu-và-phê-duyệt)
+  - [Điều phối đa tác tử và quản lý hàng đợi](#2-điều-phối-đa-tác-tử-và-quản-lý-hàng-đợi)
+  - [Cô lập môi trường và tích hợp nguyên tử](#3-cô-lập-môi-trường-và-tích-hợp-nguyên-tử)
+  - [Khôi phục sau sự cố](#4-khôi-phục-sau-sự-cố)
+- [Tra cứu lệnh CLI](#tra-cứu-lệnh-cli)
+- [Bảo mật và Kiểm soát quyền](#bảo-mật-và-kiểm-soát-quyền)
+- [Phát triển và Kiểm thử](#phát-triển-và-kiểm-thử)
 
-Phase 8 đã triển khai khôi phục plan dừng, giữ task không đổi qua revision, ngân sách sửa/retry bền vững và kiểm tra toàn bộ checkout trước `completed`. Live manager `9router` với hai worker agy đã đạt trong repo TEMP, dùng ngoại lệ quyền được duyệt riêng. UI đã nghiệm thu trên runtime fixture; CI Windows/Ubuntu với Node 24/26 đạt tại commit `4b99c39`. Xem [kiểm chứng Phase 8](docs/PHASE8-VALIDATION.md).
+---
 
-Bản nền Phase 8: 90/90 test, CI xanh. Công cụ tự host cho một người dùng trên một máy: chưa publish npm, `waiting_permission` và `waiting_input` đã có, job object Windows còn thiếu, chỉ nghe `127.0.0.1`. Logic hiển thị của UI đã tách sang `src/core/planview.ts` và có test; Phase 9 đã kiểm chứng component React bằng DOM harness riêng và nghiệm thu browser fixture. Antigravity headless vẫn cần allow-rule trong `~/.gemini/antigravity-cli/settings.json` hoặc bật **toàn quyền** ở bước duyệt. Chi tiết và thứ tự ưu tiên ở [kế hoạch](docs/PLAN.md).
+## Tổng quan kiến trúc
 
-## Đóng gói và cài đặt
+Rarp được xây dựng bằng TypeScript và Node.js, sử dụng kiến trúc phân tách rõ ràng giữa giao diện người dùng, bộ điều phối trung tâm và các tác tử thực thi:
 
-Người tạo gói chạy trong checkout nguồn:
+```text
+[CLI / Web UI] 
+      |
+      v (HTTP / SSE / Token Auth qua 127.0.0.1)
+[Runtime Daemon] <-------------------> [SQLite Database (node:sqlite)]
+      |                                  - Task state machine
+      +---> [Planner / Manager]          - Event sourcing journal
+      |       (Read-only Sandbox)        - Locks & Scheduler queue
+      |
+      +---> [Scheduler Engine]
+              |
+              +---> [Worker 1] (Git Worktree A) ---> Verification Check
+              |
+              +---> [Worker 2] (Git Worktree B) ---> Verification Check
+              |
+              v
+       [Reviewer Loop] ---> [Atomic Integration Worker] ---> Main Branch
+```
 
-```powershell
+- **Runtime Daemon**: Tiến trình nền độc lập quản lý vòng đời tác vụ, bộ lập lịch và luồng sự kiện.
+- **Lưu trữ bền vững**: Sử dụng `node:sqlite` tích hợp sẵn trong Node.js, vận hành ở chế độ Write-Ahead Logging (WAL) và giao dịch nghiêm ngặt.
+- **Tác tử AI**: Kết nối với Codex CLI và Antigravity CLI thông qua adapter kiểm soát tiến trình con, có cơ chế ngắt cây tiến trình và giới hạn thời gian chạy.
+
+---
+
+## Tính năng cốt lõi
+
+- **Lập kế hoạch tự động (Goal-Driven Planning)**: Tác tử Planner phân tích kho mã nguồn ở chế độ chỉ đọc, đề xuất danh sách công việc, mối quan hệ phụ thuộc (dependencies), đợt thực thi (waves) và lệnh kiểm thử tương ứng.
+- **Cơ chế phê duyệt tường minh (Explicit Plan Approval)**: Mọi kế hoạch đều yêu cầu người dùng xác nhận cấu hình phân bổ worker, giới hạn số vòng lặp và cấp quyền thực thi trước khi mã nguồn được phép thay đổi.
+- **Cô lập hoàn toàn qua Git Worktree**: Mỗi tác vụ được thực hiện trên một worktree độc lập. Thư mục làm việc chính chỉ tiếp nhận thay đổi khi quá trình kiểm tra và nghiệm thu đã hoàn tất thành công.
+- **Bộ lập lịch đa tác tử (Concurrent Scheduler)**: Hỗ trợ cấu hình từ 1 đến 16 luồng làm việc song song và giới hạn số lượng tác tử đánh giá (Reviewer) đồng thời. Tự động kiểm tra và ngăn chặn xung đột phạm vi tập tin (scope overlap).
+- **Vòng lặp nghiệm thu và tự sửa đổi (Automated Review Loop)**: Tác tử Reviewer đối chiếu kết quả với tiêu chí đề ra kèm bằng chứng cụ thể. Nếu phát hiện lỗi, tác vụ được gửi lại cho Worker cùng phản hồi chi tiết để khắc phục trong giới hạn ngân sách cho phép.
+- **Tương tác yêu cầu đầu vào (Human-in-the-Loop Input)**: Hỗ trợ trạng thái `waiting_input` khi Worker cần làm rõ yêu cầu, cho phép người dùng trả lời trực tiếp từ CLI hoặc Web UI mà không làm gián đoạn kế hoạch.
+- **Tích hợp nguyên tử (Atomic Integration)**: Hợp nhất các nhánh công việc đã nghiệm thu trong worktree tích hợp riêng, chạy lại toàn bộ bài kiểm tra trước khi chuyển tiếp (fast-forward) vào nhánh chính.
+- **Giao diện Web Dashboard cục bộ**: Bảng điều khiển React tích hợp sẵn trong runtime, kết nối thông qua Server-Sent Events (SSE) để hiển thị sơ đồ trạng thái, tiến độ và nhật ký chi tiết.
+
+---
+
+## Yêu cầu hệ thống
+
+- **Node.js**: Phiên bản 24.0.0 trở lên (yêu cầu hỗ trợ module `node:sqlite`).
+- **Git**: Đã cài đặt trên hệ thống; kho lưu trữ mục tiêu phải có ít nhất một commit ban đầu và trạng thái working tree sạch sẽ.
+- **CLI Agent**: Cần có ít nhất một trong các công cụ sau đã được cài đặt và đăng nhập:
+  - **Codex CLI**: Phiên bản hỗ trợ `--no-daemon`, `exec --json`, `--ephemeral`.
+  - **Antigravity CLI (`agy`)**: Đã cấu hình xác thực hợp lệ.
+- **Hệ điều hành**: Windows, Linux hoặc macOS.
+
+---
+
+## Cài đặt và Đóng gói
+
+### Đóng gói từ mã nguồn
+
+Trong thư mục mã nguồn Rarp, thực hiện:
+
+```sh
 npm ci
 npm pack
 ```
 
-`npm pack` tự build qua `prepack`, tạo `rarp-0.1.0.tgz`. Gửi file này cho máy nhận. Gói không chứa source, test fixtures, `.rarp`, logs hoặc credential; không cần TypeScript/Vite ở máy nhận.
+Lệnh `npm pack` sẽ kích hoạt `prepack` để biên dịch mã nguồn TypeScript và đóng gói ứng dụng thành tệp nén `rarp-0.1.0.tgz`. Tệp đóng gói chỉ chứa mã thực thi đã biên dịch, giao diện Web UI, lược đồ JSON và tài liệu; không bao gồm mã kiểm thử hoặc thông tin bảo mật.
 
-```powershell
+### Cài đặt toàn cục
+
+Cài đặt gói thực thi vào môi trường hệ thống:
+
+```sh
 npm install --global ./rarp-0.1.0.tgz
+```
+
+Kiểm tra cài đặt:
+
+```sh
 rarp --version
+```
+
+### Chẩn đoán môi trường với `rarp doctor`
+
+Trước khi khởi chạy dự án, sử dụng lệnh `doctor` để kiểm tra toàn bộ điều kiện tiên quyết của môi trường:
+
+```sh
 rarp --project "C:\duong-dan\du-an" doctor
+```
+
+Các tham số bổ sung:
+- `--codex <path>`: Đường dẫn tệp thực thi Codex CLI.
+- `--agy <path>`: Đường dẫn tệp thực thi Antigravity CLI.
+- `--manager-profile <name>`: Profile của Codex CLI dùng cho Planner và Reviewer.
+- `--json`: Xuất kết quả dưới định dạng JSON phục vụ tự động hóa.
+
+Lưu ý: `rarp doctor` là lệnh chỉ đọc, không ghi dữ liệu, không thay đổi tệp, không gọi API AI trả phí và không cấp quyền tự động.
+
+---
+
+## Hướng dẫn sử dụng nhanh
+
+### Bước 1: Khởi tạo kho lưu trữ cho dự án
+
+```sh
 rarp --project "C:\duong-dan\du-an" init
-rarp --project "C:\duong-dan\du-an" runtime start --manager-profile 9router
+```
+
+Lệnh này tạo thư mục cấu hình `.rarp` và cơ sở dữ liệu SQLite tại đường dẫn dự án. Hãy thêm `.rarp/` vào tệp `.gitignore` của dự án.
+
+### Bước 2: Khởi động Runtime Daemon
+
+Khởi động tiến trình nền quản lý tác vụ:
+
+```sh
+rarp --project "C:\duong-dan\du-an" runtime start --max-workers 2 --max-reviewers 1
+```
+
+Nếu muốn Planner và Reviewer sử dụng profile riêng của Codex (ví dụ: `9router`):
+
+```sh
+rarp --project "C:\duong-dan\du-an" runtime start --manager-profile 9router --max-workers 2 --max-reviewers 1
+```
+
+### Bước 3: Mở Web Dashboard
+
+Lấy liên kết truy cập bảng điều khiển giao diện web:
+
+```sh
 rarp --project "C:\duong-dan\du-an" ui
 ```
 
-Trên Linux dùng đường dẫn repo tương ứng. Repo cần commit ban đầu và checkout sạch trước khi duyệt plan. Profile `9router` chỉ là ví dụ; bỏ `--manager-profile` để dùng cấu hình mặc định của Codex. Agent CLI và thông tin đăng nhập do người dùng tự cài/cấu hình.
+Mở đường dẫn xuất hiện trên màn hình (dạng `http://127.0.0.1:<port>/ui/#token=<token>`) bằng trình duyệt web. Mã token xác thực sẽ tự động được lưu trữ an toàn trong `sessionStorage` của tab trình duyệt.
 
-`rarp doctor` chỉ đọc: kiểm tra Node, Git, repo, tài nguyên gói, Codex/Antigravity CLI, trạng thái đăng nhập Codex, cấu hình profile, SQLite và khóa runtime. Không tạo storage, migrate, sửa file, gọi model hoặc cấp quyền. Tùy chọn `--codex PATH`, `--agy PATH`, `--manager-profile NAME` phải khớp cấu hình runtime bạn muốn dùng. `--json` trả báo cáo có cấu trúc; exit code 1 khi có lỗi bắt buộc, cảnh báo trả 0. `ok: true` không xác nhận endpoint/model hay quyền headless đã sẵn sàng; doctor không thực hiện một task AI để kiểm tra chúng.
+### Bước 4: Tạo mục tiêu và phê duyệt kế hoạch
 
-Kiểm chứng gói trước khi chia sẻ:
+1. Trên giao diện Web Dashboard, chuyển đến tab **Mục tiêu & kế hoạch**.
+2. Nhập mục tiêu công việc, yêu cầu kỹ thuật và tiêu chí nghiệm thu.
+3. Nhấn **Yêu cầu phân tích**. Planner sẽ phân tích kho mã nguồn ở chế độ chỉ đọc và tạo bản kế hoạch dự thảo.
+4. Xem xét danh sách tác vụ, phạm vi tập tin (scope), đợt thực thi (waves) và lệnh kiểm thử.
+5. Lựa chọn tác tử (Codex hoặc Antigravity), thiết lập ngân sách số vòng lặp và nhấn **Duyệt và chạy**.
 
-```powershell
-npm run build
-npm run test:package
-```
+---
 
-Lệnh này pack bản build, cài production dependencies vào thư mục TEMP độc lập, kiểm tra bin, dashboard/schema và vòng planner → worker → review → integration bằng fixture. Runtime được dừng, thư mục tạm được xóa. Không gọi model thật. CI chạy kiểm chứng gói trên Windows/Ubuntu × Node 24/26.
+## Quy trình hoạt động chi tiết
 
-## Phase 8: khôi phục và tự sửa có giới hạn
+### 1. Lập kế hoạch theo mục tiêu và phê duyệt
 
-- Task accepted không cần tích hợp trước khi sửa revision; nội dung và dependency đã được chấp nhận phải giữ nguyên. Task không đổi giữ ID, lịch sử và workspace.
-- Có thể tích hợp task accepted khi plan `paused`; runtime kiểm tra fingerprint repo, commit, scope và lệnh check đã duyệt. Thao tác lặp không tạo commit/task trùng.
-- `resume` thử lại task chưa đạt trong ngân sách còn lại, dùng feedback gần nhất. Hết ngân sách: lưu revision mới, duyệt mức trần mới. Không tự chạy lại task accepted.
-- Approval cho phép chọn tổng lượt làm mỗi task (gồm lượt đầu), retry lỗi tạm thời, tổng thời gian plan và quyền tích hợp. Các lượt sửa trong mức đã duyệt không hỏi lại. Thay phạm vi/CLI/profile/ngân sách phải duyệt lại.
-- Review/check lỗi có thể sửa được sẽ trở lại worker; retry kết nối có backoff. Thiếu quyền, CLI hoặc đăng nhập, conflict, feedback lặp không tiến triển sẽ dừng và giữ workspace.
-- `accepted` là kết quả review của task. `completed` yêu cầu mọi task được tích hợp và mọi lệnh check của plan chạy lại thành công trên checkout cuối. Check lỗi lúc tích hợp hoặc kiểm tra cuối có thể dùng lượt sửa còn lại; workspace cũ được giữ để đối chiếu.
+- **Phân tích chỉ đọc**: Quá trình phân tích kế hoạch được thực hiện trong môi trường sandbox chỉ đọc. Planner không được phép sửa đổi tập tin hay chạy các lệnh thay đổi trạng thái trước khi có sự chấp thuận của người dùng.
+- **Quản lý phiên bản kế hoạch (Revisions)**: Mọi điều chỉnh về mục tiêu, danh sách tác vụ hoặc cấu hình phân bổ đều tạo ra một phiên bản kế hoạch mới kèm mã băm (hash) toàn vẹn.
+- **Xử lý phản hồi từ Worker (`waiting_input`)**: Khi gặp điểm chưa rõ ràng, Worker có thể gửi câu hỏi dạng `rarp_input`. Kế hoạch tạm dừng và chuyển sang trạng thái chờ đầu vào. Người dùng có thể trả lời thông qua Web UI hoặc dòng lệnh:
+  ```sh
+  rarp --project "C:\duong-dan\du-an" plan answer PLAN_ID --file answer.json
+  rarp --project "C:\duong-dan\du-an" plan resume PLAN_ID
+  ```
+  Nội dung tệp `answer.json` bao gồm `{ taskId, requestId, answer }`.
 
-Các mô tả workflow độc lập ở phần sau vẫn áp dụng cho task ngoài plan; ngân sách Phase 8 thuộc execution đã duyệt.
+### 2. Điều phối đa tác tử và quản lý hàng đợi
 
-## Các mốc trước
+- **Quản lý khe thực thi (Execution Slots)**: Tham số `--max-workers` quy định số lượng tác vụ được phép chạy đồng thời (từ 1 đến 16). Mỗi khe bao gồm toàn bộ chu kỳ: phân bổ -> thực thi -> kiểm thử -> chờ đánh giá -> nghiệm thu.
+- **Giới hạn số lượng Reviewer**: Tham số `--max-reviewers` giới hạn số phiên đánh giá thực sự diễn ra song song để tránh làm quá tải tài nguyên API.
+- **Chống xung đột phạm vi (Scope Conflict)**: Hai tác vụ có phạm vi tập tin hoặc thư mục giao thoa sẽ không được phân bổ chạy cùng thời điểm. Tác vụ đến sau sẽ tự động nằm trong hàng đợi chờ tác vụ trước giải phóng phạm vi.
+- **Quản lý phụ thuộc (Dependencies)**: Tác vụ phụ thuộc chỉ bắt đầu khi tất cả tác vụ tiên quyết đã được nghiệm thu (`accepted`) và tích hợp hoàn tất vào mã nguồn chung.
 
-Phase 7 đã đóng nghiệm thu 2026-10-25: 59/59 tests, CI Windows/Linux và live Codex đơn/hỗn hợp đạt. Antigravity trong bài test dùng ngoại lệ quyền được người dùng duyệt riêng; cấu hình runtime mặc định giữ nguyên. Phase 7 bổ sung mục tiêu, planner read-only, đề xuất có revision/hash và duyệt rõ ràng trước thực thi. Đã kiểm chứng UI fixture và Codex thật đến tích hợp local; xem [kiểm chứng Phase 7](docs/PHASE7-VALIDATION.md). Phase 6 bổ sung hàng chờ bền vững và nhiều workflow cách ly chạy đồng thời. Mặc định 2 slot workflow, 1 reviewer; cấu hình 1–16 slot và đã kiểm chứng 4 worker bằng barrier. Dashboard hiển thị mọi workflow, slot trống, reviewer và lý do chờ. Giữ các chức năng worktree/recovery, diff/evidence và event replay. Xem [kiểm chứng Phase 6](docs/PHASE6-VALIDATION.md).
+### 3. Cô lập môi trường và tích hợp nguyên tử
 
-## Phase 7: mục tiêu và duyệt kế hoạch
+- **Git Worktree riêng biệt**: Mỗi tác vụ hoạt động trên một nhánh và thư mục worktree riêng biệt được tạo từ điểm commit mới nhất của nhánh chính.
+- **Kiểm tra cục bộ tự động**: Sau khi Worker hoàn tất mã nguồn và tạo commit, runtime tự động chạy các lệnh kiểm thử được chỉ định trong cấu hình (ví dụ: `npm test`, `npm run build`).
+- **Nghiệm thu độc lập**: Tác tử Reviewer kiểm tra sự thay đổi và kết quả kiểm thử. Khi đạt yêu cầu, tác vụ chuyển sang trạng thái `accepted`.
+- **Tích hợp tuần tự (Sequential Integration)**:
+  ```sh
+  rarp --project "C:\duong-dan\du-an" task integrate TASK_ID
+  ```
+  Runtime tiến hành hợp nhất nhánh công việc vào một worktree tích hợp tạm thời, chạy lại toàn bộ bộ kiểm thử của dự án trên kết quả hợp nhất. Chỉ khi tất cả kiểm tra đều thành công, nhánh chính mới được cập nhật chuyển tiếp (fast-forward).
 
-Dashboard mở tab **Mục tiêu & kế hoạch**. Nhập mục tiêu, yêu cầu, tiêu chí nghiệm thu và giới hạn worker; lưu rồi yêu cầu phân tích read-only. Planner không được chạy build/test hoặc worker triển khai trước approval.
+### 4. Khôi phục sau sự cố
 
-Xem đề xuất, scope, dependency, wave, argv kiểm thử và chính sách review. Trả lời câu hỏi chưa rõ hoặc sửa JSON để tạo revision mới. Chọn Codex/Antigravity và profile riêng cho từng worker, giới hạn slot/reviewer, chính sách tích hợp; xác nhận rồi bấm **Duyệt và chạy**. Ô **Quyền Antigravity** chỉ có hiệu lực khi worker dùng Antigravity: mặc định giữ sandbox, chọn *toàn quyền* thì approval ghi `antigravityFullAccess` và lượt giao việc thêm `--dangerously-skip-permissions`; Codex không bị ảnh hưởng, đổi lựa chọn cần revision mới. Runtime kiểm tra revision/hash và trạng thái repository; CLI/profile không có sẽ báo lỗi, không fallback. Đóng hoặc reload trang không đồng nghĩa duyệt.
+- **Cơ chế giữ khóa (Lease Mechanism)**: Tiến trình runtime duy trì khóa phiên với thời hạn 15 giây.
+- **Phục hồi trạng thái sau khi dừng đột ngột**: Nếu hệ thống gặp sự cố mất điện hoặc tiến trình bị buộc dừng:
+  ```sh
+  rarp --project "C:\duong-dan\du-an" runtime recover
+  rarp --project "C:\duong-dan\du-an" runtime start
+  ```
+- **Xử lý tác vụ dở dang**: Lệnh `recover` sẽ rà soát cơ sở dữ liệu, chuyển các tác vụ đang thực thi dở dang thành `interrupted` hoặc `failed`, đồng thời bảo toàn các nhánh worktree và các tác vụ đã `accepted`. Sau khi khởi động lại, bộ lập lịch sẽ ở trạng thái tạm dừng để người dùng kiểm tra trước khi kích hoạt `resume`.
 
-Kế hoạch lưu trong SQLite; draft nhập liệu và binding chưa duyệt giữ ở trình duyệt. Tạm dừng chỉ chặn lượt giao việc mới của kế hoạch; hủy chỉ tác động các task liên quan. Tích hợp `reviewed-local` không push/deploy; `manual` cần thao tác tích hợp riêng trước khi dependency tiếp tục.
+---
 
-## Manager dùng Codex CLI profile riêng
+## Tra cứu lệnh CLI
 
-Nếu đã cấu hình profile `9router` cho Codex CLI, khởi động runtime như sau:
+Mọi lệnh đều hỗ trợ cờ toàn cục `--project <path>` (mặc định là thư mục hiện tại) và `--json` (xuất dữ liệu định dạng JSON).
 
-```powershell
-node dist/cli/index.js --project "C:\duong-dan\du-an" runtime start --manager-profile 9router --max-workers 2 --max-reviewers 1
-node dist/cli/index.js --project "C:\duong-dan\du-an" ui
-```
+### Nhóm chẩn đoán và thông tin
 
-Cả planner và reviewer tự động chạy Codex với `--profile 9router`; Codex nạp provider, model và cấu hình xác thực từ profile của bạn. Rarp giữ sandbox read-only và JSON schema cho hai vai trò này. UI hiển thị profile manager đang dùng. Worker vẫn dùng CLI/profile đã chọn riêng; `--manager-profile` không thay cấu hình worker.
+| Lệnh | Mô tả |
+| :--- | :--- |
+| `rarp doctor` | Chẩn đoán toàn diện môi trường thực thi (chỉ đọc, không gọi model). |
+| `rarp about` | Hiển thị thông tin phiên bản và các tính năng chính. |
+| `rarp status` | Xem trạng thái cơ sở dữ liệu và số lượng tác vụ hiện tại. |
+| `rarp events [--after <id>]` | Truy vấn nhật ký sự kiện, hỗ trợ đọc phân trang qua con trỏ `after`. |
 
-Đây là profile gốc của **Codex CLI**, khác với profile worker do Rarp quản lý trong `.rarp/profiles.json`. Không truyền `"codex --profile 9router"` vào `--codex`: tùy chọn đó chỉ nhận executable. Nếu runtime đang chạy, dừng rồi khởi động lại với `--manager-profile`. Profile cần tồn tại và endpoint/model của nó phải hỗ trợ lượt gọi tương ứng; lỗi được trả về, không tự fallback provider.
+### Nhóm điều khiển Runtime Daemon
 
-## Phase 6: nhiều worker
+| Lệnh | Mô tả |
+| :--- | :--- |
+| `rarp runtime start` | Khởi động tiến trình daemon nền (`--max-workers`, `--max-reviewers`, `--manager-profile`, `--codex`, `--agy`). |
+| `rarp runtime status` | Xem trạng thái hoạt động của daemon, các tác vụ đang chạy và hàng đợi. |
+| `rarp runtime stop` | Dừng an toàn tiến trình daemon và toàn bộ cây tiến trình liên quan. |
+| `rarp runtime pause` | Tạm dừng nhận tác vụ mới vào bộ lập lịch. |
+| `rarp runtime resume` | Tiếp tục bộ lập lịch tác vụ. |
+| `rarp runtime recover` | Phục hồi trạng thái dữ liệu sau sự cố dừng đột ngột. |
+| `rarp runtime queue` | Xem danh sách các điều phối đang nằm trong hàng đợi. |
+| `rarp runtime cancel [--task <id>]` | Hủy một tác vụ cụ thể hoặc hủy toàn bộ tác vụ đang chờ. |
+| `rarp ui` | In ra đường dẫn truy cập Web Dashboard kèm token bảo mật. |
 
-```powershell
-npm run build
-node dist/cli/index.js runtime start --max-workers 4 --max-reviewers 1
-node dist/cli/index.js workflow run TASK_ID --isolated --scope src/feature.mjs --check-json '["node","--test","tests/feature.test.mjs"]' --enqueue --request-key feature-v1
-node dist/cli/index.js runtime status
-node dist/cli/index.js runtime queue
-node dist/cli/index.js runtime cancel --task TASK_ID
-node dist/cli/index.js runtime pause
-node dist/cli/index.js runtime resume
-```
+### Nhóm quản lý Mục tiêu và Kế hoạch
 
-Gửi các task độc lập với worker khác nhau và scope không chồng nhau. `--enqueue` lưu yêu cầu để chờ slot, worker, scope và dependency; bỏ cờ này thì yêu cầu chưa sẵn sàng trả lỗi ngay. Mỗi task chỉ có một dispatch đang chờ/chạy. Cùng request key không tạo attempt mới; retry đã thất bại cần key mới. Queue không tự phân rã hoặc tự lấy mọi task queued: chỉ nhận yêu cầu đã gửi vào scheduler.
+| Lệnh | Mô tả |
+| :--- | :--- |
+| `rarp goal create --file <path>` | Tạo mục tiêu mới từ tệp JSON. |
+| `rarp goal list` | Liệt kê danh sách các mục tiêu đã ghi nhận. |
+| `rarp goal show <id>` | Xem chi tiết nội dung của một mục tiêu. |
+| `rarp plan list` | Liệt kê toàn bộ các kế hoạch thực thi. |
+| `rarp plan show <id>` | Xem chi tiết cấu trúc tác vụ của kế hoạch. |
+| `rarp plan analyze <id>` | Kích hoạt tác tử phân tích mã nguồn và lập kế hoạch chi tiết. |
+| `rarp plan approve <id> [--file <path>]` | Phê duyệt kế hoạch kèm cấu hình phân bổ worker. |
+| `rarp plan reject <id>` | Từ chối bản kế hoạch. |
+| `rarp plan pause <id>` | Tạm dừng kế hoạch đang chạy. |
+| `rarp plan resume <id>` | Tiếp tục kế hoạch đã tạm dừng. |
+| `rarp plan answer <id> --file <path>` | Gửi câu trả lời cho yêu cầu đầu vào từ tác tử Worker. |
 
-Một slot giữ toàn bộ vòng worker → verification → chờ reviewer → review → sửa. `maxReviewers` giới hạn riêng số lượt review thực sự đang chạy trong các slot đó. Cùng worker ID không nhận hai workflow; phạm vi file/thư mục chồng nhau phải chờ. Task `accepted` chưa tích hợp vẫn giữ phạm vi để tránh task sau bắt đầu từ code cũ. Task phụ thuộc chờ cả nghiệm thu và tích hợp của dependency cách ly.
+### Nhóm quản lý Tác vụ và Luồng làm việc
 
-```powershell
-node dist/cli/index.js task integrate ACCEPTED_TASK_ID
-```
+| Lệnh | Mô tả |
+| :--- | :--- |
+| `rarp task create` | Tạo tác vụ thủ công (`--title`, `--actor`, `--assignee`, `--body`, `--depends-on`). |
+| `rarp task list [--status <name>]` | Danh sách tác vụ, có thể lọc theo trạng thái. |
+| `rarp task show <id>` | Xem chi tiết tác vụ, lịch sử nộp bài và đánh giá. |
+| `rarp task workspace <id>` | Xem thông tin đường dẫn Git worktree của tác vụ. |
+| `rarp task integrate <id>` | Tích hợp tác vụ đã nghiệm thu vào nhánh chính của kho lưu trữ. |
+| `rarp workflow run <taskId>` | Chạy quy trình làm việc độc lập (`--isolated`, `--adapter`, `--scope`, `--check-json`, `--max-rounds`). |
 
-Tích hợp được xếp nối tiếp, có thể chạy trong lúc các worktree độc lập khác hoạt động. Checkout chính chỉ cập nhật sau kiểm thử trên kết quả chung. Verification chạy bất đồng bộ, có timeout và cleanup cây tiến trình. UI gửi yêu cầu tích hợp bất đồng bộ, hiển thị trạng thái thực tế; API `{taskId, async:true}` trả 202, mặc định vẫn đợi kết quả để tương thích CLI. Các thao tác Git ngắn vẫn đồng bộ.
+---
 
-`runtime cancel --task ID` dừng đúng một workflow hoặc bỏ dispatch khỏi hàng chờ; các workflow khác tiếp tục. Khi có nhiều workflow, `runtime cancel` không có ID bị từ chối. `runtime stop` dừng mọi cây tiến trình do runtime quản lý. Pause chỉ ngăn dispatch mới, không dừng công việc đang chạy. Sau restart có queue tồn đọng, scheduler luôn paused; dùng `runtime resume` để tiếp tục. Sau crash phải `runtime recover` trước; dispatch đang chạy thành interrupted, không tự replay side effect. Kết quả accepted và commit được giữ; review gián đoạn có thể resume bằng key mới.
+## Bảo mật và Kiểm soát quyền
 
-Snapshot có `workers[]`, `queue[]`, `limits`, `paused`, `integration`, `lastIntegration`. `active` vẫn là workflow đầu tiên để giữ tương thích client cũ; client nhiều worker phải dùng `workers[]`. Có thể đăng ký nhiều worker, nhưng 16 chỉ là giới hạn cấu hình, không phải khẳng định khả năng tài khoản/máy.
+1. **Giới hạn kết nối mạng cục bộ**:
+   - Runtime Daemon chỉ lắng nghe duy nhất trên giao diện mạng vòng `127.0.0.1`.
+   - Không hỗ trợ kết nối từ xa. Mọi yêu cầu HTTP/SSE đều bắt buộc mang theo token xác thực ngẫu nhiên được tạo ra tại thời điểm khởi động daemon.
+2. **Quyền hạn của tác tử Planner và Reviewer**:
+   - Được ép buộc chạy trong cấu hình sandbox chỉ đọc.
+   - Không thể tự ý chạy các lệnh shell hoặc chỉnh sửa mã nguồn dự án trong giai đoạn lập kế hoạch và đánh giá.
+3. **Quyền hạn của tác tử Worker**:
+   - Mặc định, các tác tử hoạt động dưới quyền hạn sandbox chuẩn của công cụ nền tảng.
+   - Khi sử dụng Antigravity CLI, cờ bỏ qua kiểm tra quyền (`--dangerously-skip-permissions`) chỉ được bổ sung khi và chỉ khi người dùng chủ động lựa chọn tùy chọn cấp toàn quyền trong bước duyệt kế hoạch.
+4. **Bảo vệ khóa bí mật (Secrets Protection)**:
+   - Cơ sở dữ liệu và nhật ký sự kiện của Rarp tuyệt đối không lưu trữ khóa API hoặc thông tin đăng nhập cá nhân.
+   - Các tác tử kế thừa cấu hình chứng thực từ phiên đăng nhập cục bộ sẵn có của Codex CLI hoặc Antigravity CLI trên máy của người dùng.
 
-Demo tạm không gọi model: `node scripts/demo-phase6.mjs`; Enter giải phóng barrier worker/reviewer. Bài AI thật có tiêu thụ hạn mức: `node scripts/smoke-phase6.mjs --model gpt-6.1-sol --plain-tools`. Cờ `--plain-tools` tắt user hooks chỉ cho tiến trình test; giữ sandbox/approval. `--codex PATH` chọn executable có sẵn. Chi tiết và giới hạn xem báo cáo kiểm chứng.
+---
 
-## Phase 5: dashboard local
+## Phát triển và Kiểm thử
 
-```powershell
+### Cài đặt môi trường phát triển
+
+```sh
+git clone https://github.com/yoyozero10/rarp.git
+cd rarp
 npm ci
-npm run build
-node dist/cli/index.js runtime start
-node dist/cli/index.js ui
 ```
 
-Mở liên kết được in bởi `ui` trong trình duyệt. Dự án cần `init` và agent như hướng dẫn bên dưới. Dashboard được phục vụ từ chính runtime, không cần Vite dev server. Token nằm trong URL fragment, được xóa khỏi thanh địa chỉ sau khi đọc và giữ trong sessionStorage của tab để reload; không đưa liên kết này vào issue hoặc chia sẻ công khai. Runtime chỉ bind `127.0.0.1`, không hỗ trợ truy cập từ xa.
+### Các tập lệnh kiểm tra chất lượng
 
-UI cho phép đăng ký agent, tạo task/dependency, chạy workflow trong worktree riêng, dừng workflow, đưa task lại queued, đổi worker, review thủ công, hủy task và tích hợp commit. Mọi thao tác hiển thị pending/succeeded/failed; lỗi đầu vào hoặc trạng thái cũ không được báo thành công. Actor vẫn là ID trong môi trường local tin cậy, không phải hệ thống tài khoản đa người dùng.
-
-Đóng UI không dừng runtime. Khi mở lại, snapshot và cursor tải trạng thái hiện tại; stream reconnect tiếp từ sự kiện đã nhận. Tổng quan giữ tối đa 200 sự kiện; log theo task có phân trang (100 mỗi trang, tối đa 1.000 trong bộ nhớ UI). Lịch sử đầy đủ vẫn nằm trong SQLite/CLI. Quan hệ dependency được trình bày bằng các cạnh có thể chọn, chưa có canvas kéo/thả. Diff giới hạn 2 MiB và hiển thị commit checkpoint, không phải thay đổi chưa commit. Lệnh verification/merge vẫn chạy đồng bộ như Phase 4 nên có thể làm UI chờ phản hồi.
-
-Chạy demo tạm, không gọi model trả phí:
-
-```powershell
-node scripts/demo-phase5.mjs
-```
-
-Demo in thư mục repository tạm và URL dashboard; dùng fixture cho worker/reviewer. `Ctrl+C` dừng demo. Xem [kiểm chứng Phase 5](docs/PHASE5-VALIDATION.md).
-
-## Phát triển
-
-Yêu cầu Node.js >=24 và npm.
-
-```sh
-npm ci
-npm run dev -- --help
-npm run typecheck
-npm run build
-node dist/cli/index.js about
-```
-
-Kế hoạch: [docs/PLAN.md](docs/PLAN.md). Quyết định kiến trúc: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-Các thư mục thử nghiệm cũ `.squad-smoke/` và `router-model-test/` được giữ ngoài Git. Không đưa API key, log agent hoặc dữ liệu phiên vào repo.
-
-## Phase 1: dùng thử
-
-Chạy sau `npm run build` (hoặc dùng `npm run dev --` thay cho `node dist/cli/index.js`).
-
-```sh
-node dist/cli/index.js init
-node dist/cli/index.js agent register manager --role manager
-node dist/cli/index.js agent register worker --role worker
-node dist/cli/index.js task create --title "Create cart" --actor manager --assignee worker
-node dist/cli/index.js task list --json
-node dist/cli/index.js status --json
-```
-
-Thay `TASK_ID` bằng ID trả về từ lệnh create:
-
-```sh
-node dist/cli/index.js task transition TASK_ID running --actor worker --note "Started"
-node dist/cli/index.js task transition TASK_ID submitted --actor worker --note "Tests passed"
-node dist/cli/index.js task transition TASK_ID reviewing --actor manager --note "Reviewing output"
-node dist/cli/index.js task transition TASK_ID accepted --actor manager --note "Verified result"
-node dist/cli/index.js task show TASK_ID --json
-node dist/cli/index.js events --json
-```
-
-- Dùng `changes_requested` thay cho `accepted` để yêu cầu sửa; manager chuyển lại `queued`, worker nhận `running` để tạo attempt mới.
-- `--depends-on ID1 ID2` khi tạo task: các dependency phải tồn tại và đều `accepted` trước khi worker bắt đầu. Phase 1 không sửa dependency sau khi tạo, nên cạnh luôn hướng tới task đã tồn tại và không thể tạo chu kỳ qua CLI.
-- `--project PATH` chọn thư mục dự án chính xác; không tự dò thư mục cha. Database nằm ở `PATH/.rarp/state.db`. Khi dùng dự án khác, thêm `.rarp/` vào gitignore của dự án đó.
-- Init/đăng ký lại cùng agent là idempotent. Chuyển trạng thái lặp lại bị từ chối; chưa có cơ chế retry/idempotency key của runtime.
-- Mọi chuyển trạng thái cần `--note`. Chỉ worker được giao nhận/nộp việc; chỉ manager tạo task đó có quyền review và nghiệm thu.
-- `--actor` là ID do người gọi khai báo trong môi trường local tin cậy, chưa phải xác thực bảo mật. Người có quyền sửa database vẫn có thể thay dữ liệu.
-- Output là JSON; `--json` xuất gọn một dòng. Lỗi trả exit code 1. `events` hiện trả toàn bộ lịch sử; phân trang/cursor sẽ bổ sung trước UI.
-
-SQLite dùng `node:sqlite` có sẵn trong Node, không cần native npm addon. Test local đã chạy trên Windows với Node 26; CI kiểm tra Node 24/26 trên Windows/Linux.
-
+Kiểm tra kiểu dữ liệu tĩnh:
 ```sh
 npm run typecheck
+```
+
+Biên dịch ứng dụng:
+```sh
+npm run build
+```
+
+Chạy toàn bộ bộ kiểm thử tự động:
+```sh
 npm test
 ```
 
-## Phase 4: worktree và phục hồi có kiểm soát
-
-Workflow có thể chạy trong Git worktree riêng; checkout chính phải sạch, `.rarp/` phải được bỏ qua bởi Git. Scope là danh sách file/thư mục tương đối với repo, không phải sandbox bảo mật. Lệnh kiểm tra chạy bằng executable và argv, không qua shell.
-
-```powershell
-node dist/cli/index.js workflow run TASK_ID --isolated --scope src --check-json '["node","--test"]' --request-key feature-v1
-node dist/cli/index.js task integrate TASK_ID
-node dist/cli/index.js events --after 0
-```
-
-Worker tạo commit, chạy check, manager review. Chỉ task `accepted` mới được tích hợp. Runtime merge trong worktree tích hợp, chạy lại check trên kết quả chung, rồi fast-forward checkout chính. Conflict hoặc check lỗi giữ nguyên checkout chính; sửa và commit conflict trong worktree tích hợp được báo lỗi, sau đó gọi lại `task integrate`.
-
-Sau crash, không tự chạy lại worker:
-
-```powershell
-node dist/cli/index.js runtime recover
-node dist/cli/index.js runtime start
-node dist/cli/index.js workflow run TASK_ID --isolated --resume-review --request-key review-v2
-```
-
-Recovery chỉ cho phép khi runtime/host không còn sống và lease 15 giây đã hết. Task đang chạy thành `failed`, file sửa được giữ; manager phải kiểm tra rồi chuyển `queued` và dùng request key mới nếu muốn retry. Review gián đoạn trở về `submitted`, có thể dùng `--resume-review`; task đã accepted không review lại. Cùng request key và cùng nội dung trả run cũ, không tạo attempt mới. Scope/check của workspace đã tạo không được thay đổi. Event có cursor `--after` để đọc tiếp; không có consumer tự replay side effect.
-
-Kiểm thử hai worker sửa feature và tích hợp tuần tự, không dùng tài khoản AI:
-
-```powershell
-npm run build
-node scripts/smoke-phase4.mjs --fixture
-```
-
-Bỏ `--fixture` để dùng Codex thật, có tiêu thụ hạn mức tài khoản. Fixture reviewer không thay thế nghiệm thu bằng model thật. Chưa bảo đảm containment tiến trình cố ý tách cây, tự tiếp tục phiên model, hay tự giải quyết conflict. Worktree được giữ để kiểm tra thủ công.
-
-## Phase 2: chạy worker Codex
-
-Yêu cầu Codex CLI đã đăng nhập, hỗ trợ `--no-daemon`, `exec --json`, `--ephemeral`. Bản đã kiểm tra: 0.162.1. Chạy build trước, sau đó init, đăng ký manager/worker và tạo task như trên.
-
+Kiểm tra tính toàn vẹn của gói đóng gói trong môi trường độc lập:
 ```sh
-node dist/cli/index.js runtime start
-node dist/cli/index.js worker run TASK_ID --timeout-ms 120000
-node dist/cli/index.js runtime status
-node dist/cli/index.js task show TASK_ID --json
-node dist/cli/index.js runtime cancel
-node dist/cli/index.js runtime stop
+npm run test:package
 ```
 
-`worker run` trả về ngay khi dispatch; theo dõi bằng runtime status. Có thể dùng `runtime start --codex ABSOLUTE_PATH_TO_CODEX_EXE` nếu Codex không nằm trên PATH. Đường dẫn là executable thật, không phải chuỗi lệnh shell hay file .cmd. `--project PATH` dùng chung cho tất cả lệnh.
+Tập lệnh `test:package` sẽ đóng gói bản build, cài đặt dependencies vào thư mục tạm độc lập, khởi tạo runtime và kiểm tra vòng lặp Planner -> Worker -> Review -> Integration bằng fixtures giả lập.
 
-Runtime chạy nền độc lập với CLI, bind 127.0.0.1 và giữ token/port trong `.rarp/runtime.json`; file này cũng là khóa tạo độc quyền. Sau stop sạch khóa được xóa. Nếu runtime crash, khóa được giữ để tránh tự chạy trùng; cần kiểm tra tiến trình/task trước khi xóa khóa thủ công. Không tự kill PID đọc từ khóa cũ.
+---
 
-`worker run` sửa trực tiếp thư mục dự án nên chạy độc quyền; nhiều workflow cách ly dùng scheduler Phase 6 ở trên. Worker xong chỉ chuyển sang `submitted`, manager vẫn review bằng CLI. Timeout/cancel/lỗi chuyển sang `failed` và lưu lý do; cancel runtime không đồng nghĩa hủy task vĩnh viễn. Có thể cho retry bằng manager chuyển `queued`. Không thao tác chuyển trạng thái thủ công của task đang được runtime chạy.
+## Giấy phép
 
-Trạng thái runtime là starting/ready/working/stopping; kết quả worker là exited/failed. Adapter hiện chạy non-interactive với approval never: không hỗ trợ tiếp tục từ waiting_input/waiting_permission và không suy diễn hai trạng thái đó từ log. Khi bị từ chối công cụ, xem kết quả và log trước khi nghiệm thu.
-
-Log JSONL/stderr được lưu dưới events với taskId/attemptId, tối đa 8 MiB output mỗi lượt và 1 MiB mỗi khung JSONL. Logs có thể chứa nội dung công việc; database luôn nằm ngoài Git. Cleanup dùng taskkill /T /F trên Windows và process group trên Unix, đã test với tiến trình con còn trong cây. Tiến trình cố ý tách khỏi cây và khôi phục khi hệ thống crash chưa được bảo đảm; cần cơ chế containment mạnh hơn trước khi chạy tác vụ dài không giám sát.
-
-Chạy test thật có sử dụng tài khoản Codex (workspace tạm, timeout 120 giây):
-
-```sh
-npm run build
-node scripts/smoke-phase2.mjs
-```
-
-Kết quả kiểm chứng ngày 2026-10-23: worker tạo cart.json đúng số liệu, task submitted, runtime stop thành công. CI chỉ chạy fixtures giả lập, không dùng tài khoản/model thật.
-
-## Phase 3: workflow tự review và sửa
-
-```sh
-node dist/cli/index.js runtime start
-node dist/cli/index.js workflow run TASK_ID --adapter antigravity --max-rounds 3 --timeout-ms 120000 --total-timeout-ms 600000
-node dist/cli/index.js runtime status
-node dist/cli/index.js task show TASK_ID --json
-node dist/cli/index.js runtime stop
-```
-
-`--adapter codex` là mặc định. Có thể chọn `--agy PATH` khi start runtime. Manager hiện dùng Codex ở sandbox read-only, độc lập với worker. Manager nhận yêu cầu gốc và báo cáo worker, kiểm tra file rồi trả JSON theo `schemas/review.json`; Rarp kiểm tra lại bằng Zod. Quyết định bắt buộc có feedback và evidence. Model review vẫn có thể đánh giá sai; cần kiểm thử phù hợp trước khi tích hợp code quan trọng.
-
-`changes_requested` được lưu cùng evidence rồi chuyển thành feedback cho attempt mới. Hết max-rounds thì task giữ `changes_requested`; manager có thể đưa lại queued thủ công. Output review không hợp lệ, timeout, quyền công cụ bị từ chối hoặc cancel sẽ dừng workflow, không tự retry lỗi hạ tầng và không tự accept. Lỗi trong review chuyển task sang failed nhưng giữ nguyên attempt đã submitted. Events phân biệt worker.output và review.output, cùng task/attempt ID.
-
-Một workflow chạy worker/reviewer nối tiếp trong cùng worktree; nhiều workflow cách ly có thể chạy song song qua Phase 6. Chưa tự phân rã mục tiêu, tự nhận mọi task queued hoặc resume phiên model sau crash. Queue chỉ chứa yêu cầu enqueue tường minh; dependency cần accepted và integrated trước khi dispatch cách ly.
-
-Antigravity mặc định dùng sandbox, không tự bỏ duyệt quyền. Headless có thể trả SUCCESS nhưng kèm denied_actions; adapter coi đây là thất bại. Script kiểm thử thật `node scripts/smoke-phase3.mjs` chạy hai task nối tiếp qua Antigravity và Codex; `--codex-only` thử riêng Codex. Tùy chọn `--allow-agy-auto-approve` chỉ dành cho bài test tạm khi người dùng cho phép rõ ràng: nó thêm dangerously-skip-permissions cho tiến trình Antigravity đó, không sửa cấu hình lâu dài và không phải một sandbox giới hạn thư mục. Khi headless bị chặn, output là `jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied`; cách sửa là thêm allow-rule `command(<target>)` vào `permissions.allow` trong `~/.gemini/antigravity-cli/settings.json` hoặc thêm repo vào `trustedWorkspaces`, không dùng bypass.
+Dự án này là phần mềm nội bộ (Private / Proprietary). Mọi quyền được bảo lưu.
