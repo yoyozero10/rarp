@@ -1,288 +1,293 @@
 # Rarp
 
-Hệ thống runtime và giao diện dòng lệnh (CLI) điều phối đa tác tử AI (Multi-Agent Orchestration) trên máy cục bộ. Rarp hỗ trợ lập kế hoạch theo mục tiêu, phân rã công việc, thực thi mã nguồn trong môi trường Git worktree cô lập, tự động kiểm thử, nghiệm thu kết quả và tích hợp an toàn vào nhánh chính.
+Local multi-agent orchestration runtime and command-line interface (CLI) for autonomous software engineering workflows. Rarp coordinates goal-driven task decomposition, isolated execution via Git worktrees, automated verification checks, structured review loops, and atomic integration into target repositories.
 
 ---
 
-## Mục lục
+## Table of Contents
 
-- [Tổng quan kiến trúc](#tổng-quan-kiến-trúc)
-- [Tính năng cốt lõi](#tính-năng-cốt-lõi)
-- [Yêu cầu hệ thống](#yêu-cầu-hệ-thống)
-- [Cài đặt và Đóng gói](#cài-đặt-và-đóng-gói)
-- [Hướng dẫn sử dụng nhanh](#hướng-dẫn-sử-dụng-nhanh)
-- [Quy trình hoạt động chi tiết](#quy-trình-hoạt-động-chi-tiết)
-  - [Lập kế hoạch theo mục tiêu và phê duyệt](#1-lập-kế-hoạch-theo-mục-tiêu-và-phê-duyệt)
-  - [Điều phối đa tác tử và quản lý hàng đợi](#2-điều-phối-đa-tác-tử-và-quản-lý-hàng-đợi)
-  - [Cô lập môi trường và tích hợp nguyên tử](#3-cô-lập-môi-trường-và-tích-hợp-nguyên-tử)
-  - [Khôi phục sau sự cố](#4-khôi-phục-sau-sự-cố)
-- [Tra cứu lệnh CLI](#tra-cứu-lệnh-cli)
-- [Bảo mật và Kiểm soát quyền](#bảo-mật-và-kiểm-soát-quyền)
-- [Phát triển và Kiểm thử](#phát-triển-và-kiểm-thử)
+- [Architectural Overview](#architectural-overview)
+- [Core Capabilities](#core-capabilities)
+- [System Requirements](#system-requirements)
+- [Packaging and Installation](#packaging-and-installation)
+- [Quick Start Guide](#quick-start-guide)
+- [Detailed Operational Workflows](#detailed-operational-workflows)
+  - [1. Goal-Driven Planning and Explicit Approval](#1-goal-driven-planning-and-explicit-approval)
+  - [2. Multi-Agent Scheduling and Queue Management](#2-multi-agent-scheduling-and-queue-management)
+  - [3. Environment Isolation and Atomic Integration](#3-environment-isolation-and-atomic-integration)
+  - [4. Crash Recovery and State Leases](#4-crash-recovery-and-state-leases)
+- [CLI Reference](#cli-reference)
+  - [Diagnostics and Metadata](#diagnostics-and-metadata)
+  - [Runtime Daemon Management](#runtime-daemon-management)
+  - [Goals and Plans](#goals-and-plans)
+  - [Tasks and Workflows](#tasks-and-workflows)
+- [Security and Access Control](#security-and-access-control)
+- [Development and Verification](#development-and-verification)
+- [License](#license)
 
 ---
 
-## Tổng quan kiến trúc
+## Architectural Overview
 
-Rarp được xây dựng bằng TypeScript và Node.js, sử dụng kiến trúc phân tách rõ ràng giữa giao diện người dùng, bộ điều phối trung tâm và các tác tử thực thi:
+Rarp is implemented in TypeScript on Node.js, establishing a strict boundary between user presentation, central orchestration, and worker agents:
 
 ```text
 [CLI / Web UI] 
       |
-      v (HTTP / SSE / Token Auth qua 127.0.0.1)
-[Runtime Daemon] <-------------------> [SQLite Database (node:sqlite)]
+      v (HTTP / SSE / Token Authentication over 127.0.0.1)
+[Runtime Daemon] <-------------------> [SQLite State Store (node:sqlite)]
       |                                  - Task state machine
       +---> [Planner / Manager]          - Event sourcing journal
       |       (Read-only Sandbox)        - Locks & Scheduler queue
       |
       +---> [Scheduler Engine]
               |
-              +---> [Worker 1] (Git Worktree A) ---> Verification Check
+              +---> [Worker 1] (Git Worktree A) ---> Verification Checks
               |
-              +---> [Worker 2] (Git Worktree B) ---> Verification Check
+              +---> [Worker 2] (Git Worktree B) ---> Verification Checks
               |
               v
        [Reviewer Loop] ---> [Atomic Integration Worker] ---> Main Branch
 ```
 
-- **Runtime Daemon**: Tiến trình nền độc lập quản lý vòng đời tác vụ, bộ lập lịch và luồng sự kiện.
-- **Lưu trữ bền vững**: Sử dụng `node:sqlite` tích hợp sẵn trong Node.js, vận hành ở chế độ Write-Ahead Logging (WAL) và giao dịch nghiêm ngặt.
-- **Tác tử AI**: Kết nối với Codex CLI và Antigravity CLI thông qua adapter kiểm soát tiến trình con, có cơ chế ngắt cây tiến trình và giới hạn thời gian chạy.
+- **Runtime Daemon**: A standalone background process managing task lifecycles, execution scheduling, and real-time event streams.
+- **Persistent State Store**: Employs Node.js native `node:sqlite` operating in Write-Ahead Logging (WAL) mode with strict transactional guarantees.
+- **Autonomous Agents**: Interfaces with Codex CLI and Antigravity CLI adapters, enforcing subprocess tree supervision, process group termination, and configurable execution timeouts.
 
 ---
 
-## Tính năng cốt lõi
+## Core Capabilities
 
-- **Lập kế hoạch tự động (Goal-Driven Planning)**: Tác tử Planner phân tích kho mã nguồn ở chế độ chỉ đọc, đề xuất danh sách công việc, mối quan hệ phụ thuộc (dependencies), đợt thực thi (waves) và lệnh kiểm thử tương ứng.
-- **Cơ chế phê duyệt tường minh (Explicit Plan Approval)**: Mọi kế hoạch đều yêu cầu người dùng xác nhận cấu hình phân bổ worker, giới hạn số vòng lặp và cấp quyền thực thi trước khi mã nguồn được phép thay đổi.
-- **Cô lập hoàn toàn qua Git Worktree**: Mỗi tác vụ được thực hiện trên một worktree độc lập. Thư mục làm việc chính chỉ tiếp nhận thay đổi khi quá trình kiểm tra và nghiệm thu đã hoàn tất thành công.
-- **Bộ lập lịch đa tác tử (Concurrent Scheduler)**: Hỗ trợ cấu hình từ 1 đến 16 luồng làm việc song song và giới hạn số lượng tác tử đánh giá (Reviewer) đồng thời. Tự động kiểm tra và ngăn chặn xung đột phạm vi tập tin (scope overlap).
-- **Vòng lặp nghiệm thu và tự sửa đổi (Automated Review Loop)**: Tác tử Reviewer đối chiếu kết quả với tiêu chí đề ra kèm bằng chứng cụ thể. Nếu phát hiện lỗi, tác vụ được gửi lại cho Worker cùng phản hồi chi tiết để khắc phục trong giới hạn ngân sách cho phép.
-- **Tương tác yêu cầu đầu vào (Human-in-the-Loop Input)**: Hỗ trợ trạng thái `waiting_input` khi Worker cần làm rõ yêu cầu, cho phép người dùng trả lời trực tiếp từ CLI hoặc Web UI mà không làm gián đoạn kế hoạch.
-- **Tích hợp nguyên tử (Atomic Integration)**: Hợp nhất các nhánh công việc đã nghiệm thu trong worktree tích hợp riêng, chạy lại toàn bộ bài kiểm tra trước khi chuyển tiếp (fast-forward) vào nhánh chính.
-- **Giao diện Web Dashboard cục bộ**: Bảng điều khiển React tích hợp sẵn trong runtime, kết nối thông qua Server-Sent Events (SSE) để hiển thị sơ đồ trạng thái, tiến độ và nhật ký chi tiết.
-
----
-
-## Yêu cầu hệ thống
-
-- **Node.js**: Phiên bản 24.0.0 trở lên (yêu cầu hỗ trợ module `node:sqlite`).
-- **Git**: Đã cài đặt trên hệ thống; kho lưu trữ mục tiêu phải có ít nhất một commit ban đầu và trạng thái working tree sạch sẽ.
-- **CLI Agent**: Cần có ít nhất một trong các công cụ sau đã được cài đặt và đăng nhập:
-  - **Codex CLI**: Phiên bản hỗ trợ `--no-daemon`, `exec --json`, `--ephemeral`.
-  - **Antigravity CLI (`agy`)**: Đã cấu hình xác thực hợp lệ.
-- **Hệ điều hành**: Windows, Linux hoặc macOS.
+- **Goal-Driven Planning**: Planner agents inspect the target codebase within a read-only sandbox, proposing structured task lists, dependency DAGs, parallel execution waves, and deterministic verification commands.
+- **Explicit Plan Approval**: All generated plans require explicit operator confirmation regarding worker allocation, review iteration bounds, and permission scopes before workspace mutations can occur.
+- **Complete Git Worktree Isolation**: Each task is dispatched to an isolated Git worktree. The primary working tree remains untouched until all verification checks and code reviews have passed.
+- **Concurrent Scheduler**: Supports 1 to 16 parallel worker slots with a dedicated cap on concurrent reviewer agents. Automatically prevents file-scope overlap and race conditions between tasks.
+- **Automated Review & Repair Loop**: Reviewer agents inspect candidate patches against acceptance criteria and test output, returning structured JSON feedback. Tasks failing review are routed back to workers for iterative remediation within approved round budgets.
+- **Human-in-the-Loop Clarification**: Supports the `waiting_input` state when an agent requires specification disambiguation, enabling operators to answer via CLI or Web UI without terminating the plan.
+- **Atomic Integration Worker**: Replays candidate branches into a dedicated integration worktree, executes the full test suite across the combined state, and fast-forwards the main branch only upon total test success.
+- **Embedded Web Dashboard**: Embedded React dashboard connecting via Server-Sent Events (SSE) to deliver real-time dependency graphs, queue states, and execution logs.
 
 ---
 
-## Cài đặt và Đóng gói
+## System Requirements
 
-### Đóng gói từ mã nguồn
+- **Node.js**: Version 24.0.0 or higher (requiring native `node:sqlite` support).
+- **Git**: Installed and available in `PATH`. Target repositories must contain at least one initial commit and a clean working tree.
+- **Agent CLI Adapters**: At least one authenticated CLI installed:
+  - **Codex CLI**: Supporting `--no-daemon`, `exec --json`, and `--ephemeral`.
+  - **Antigravity CLI (`agy`)**: Configured with valid local credentials.
+- **Operating System**: Windows 10/11, Linux, or macOS.
 
-Trong thư mục mã nguồn Rarp, thực hiện:
+---
+
+## Packaging and Installation
+
+### Building from Source
+
+From the root of the Rarp source repository:
 
 ```sh
 npm ci
 npm pack
 ```
 
-Lệnh `npm pack` sẽ kích hoạt `prepack` để biên dịch mã nguồn TypeScript và đóng gói ứng dụng thành tệp nén `rarp-0.1.0.tgz`. Tệp đóng gói chỉ chứa mã thực thi đã biên dịch, giao diện Web UI, lược đồ JSON và tài liệu; không bao gồm mã kiểm thử hoặc thông tin bảo mật.
+The `npm pack` command triggers `prepack` to compile TypeScript source files and bundle assets into `rarp-0.1.0.tgz`. The published tarball contains exclusively compiled artifacts, the web UI bundle, JSON schemas, and documentation.
 
-### Cài đặt toàn cục
+### Global Installation
 
-Cài đặt gói thực thi vào môi trường hệ thống:
+Install the compiled tarball globally:
 
 ```sh
 npm install --global ./rarp-0.1.0.tgz
 ```
 
-Kiểm tra cài đặt:
+Verify the installation:
 
 ```sh
 rarp --version
 ```
 
-### Chẩn đoán môi trường với `rarp doctor`
+### Environment Diagnostics via `rarp doctor`
 
-Trước khi khởi chạy dự án, sử dụng lệnh `doctor` để kiểm tra toàn bộ điều kiện tiên quyết của môi trường:
+Verify system prerequisites and CLI adapter availability:
 
 ```sh
-rarp --project "C:\duong-dan\du-an" doctor
+rarp --project "C:\path\to\target-repo" doctor
 ```
 
-Các tham số bổ sung:
-- `--codex <path>`: Đường dẫn tệp thực thi Codex CLI.
-- `--agy <path>`: Đường dẫn tệp thực thi Antigravity CLI.
-- `--manager-profile <name>`: Profile của Codex CLI dùng cho Planner và Reviewer.
-- `--json`: Xuất kết quả dưới định dạng JSON phục vụ tự động hóa.
+Available flags:
+- `--codex <path>`: Custom binary path for Codex CLI.
+- `--agy <path>`: Custom binary path for Antigravity CLI.
+- `--manager-profile <name>`: Configuration profile for Planner and Reviewer agents.
+- `--json`: Output results in structured JSON for automation pipelines.
 
-Lưu ý: `rarp doctor` là lệnh chỉ đọc, không ghi dữ liệu, không thay đổi tệp, không gọi API AI trả phí và không cấp quyền tự động.
+Note: `rarp doctor` is strictly read-only. It executes no modifications, performs no billable model invocations, and grants no elevated permissions.
 
 ---
 
-## Hướng dẫn sử dụng nhanh
+## Quick Start Guide
 
-### Bước 1: Khởi tạo kho lưu trữ cho dự án
-
-```sh
-rarp --project "C:\duong-dan\du-an" init
-```
-
-Lệnh này tạo thư mục cấu hình `.rarp` và cơ sở dữ liệu SQLite tại đường dẫn dự án. Hãy thêm `.rarp/` vào tệp `.gitignore` của dự án.
-
-### Bước 2: Khởi động Runtime Daemon
-
-Khởi động tiến trình nền quản lý tác vụ:
+### Step 1: Initialize the Target Repository
 
 ```sh
-rarp --project "C:\duong-dan\du-an" runtime start --max-workers 2 --max-reviewers 1
+rarp --project "C:\path\to\target-repo" init
 ```
 
-Nếu muốn Planner và Reviewer sử dụng profile riêng của Codex (ví dụ: `9router`):
+Initializes the `.rarp` directory and creates the local SQLite database. Append `.rarp/` to the target repository's `.gitignore`.
+
+### Step 2: Start the Runtime Daemon
+
+Start the background daemon process:
 
 ```sh
-rarp --project "C:\duong-dan\du-an" runtime start --manager-profile 9router --max-workers 2 --max-reviewers 1
+rarp --project "C:\path\to\target-repo" runtime start --max-workers 2 --max-reviewers 1
 ```
 
-### Bước 3: Mở Web Dashboard
-
-Lấy liên kết truy cập bảng điều khiển giao diện web:
+To configure a dedicated manager profile (e.g., custom model routing):
 
 ```sh
-rarp --project "C:\duong-dan\du-an" ui
+rarp --project "C:\path\to\target-repo" runtime start --manager-profile custom-router --max-workers 2 --max-reviewers 1
 ```
 
-Mở đường dẫn xuất hiện trên màn hình (dạng `http://127.0.0.1:<port>/ui/#token=<token>`) bằng trình duyệt web. Mã token xác thực sẽ tự động được lưu trữ an toàn trong `sessionStorage` của tab trình duyệt.
+### Step 3: Launch the Web Dashboard
 
-### Bước 4: Tạo mục tiêu và phê duyệt kế hoạch
+Retrieve the local dashboard access URL:
 
-1. Trên giao diện Web Dashboard, chuyển đến tab **Mục tiêu & kế hoạch**.
-2. Nhập mục tiêu công việc, yêu cầu kỹ thuật và tiêu chí nghiệm thu.
-3. Nhấn **Yêu cầu phân tích**. Planner sẽ phân tích kho mã nguồn ở chế độ chỉ đọc và tạo bản kế hoạch dự thảo.
-4. Xem xét danh sách tác vụ, phạm vi tập tin (scope), đợt thực thi (waves) và lệnh kiểm thử.
-5. Lựa chọn tác tử (Codex hoặc Antigravity), thiết lập ngân sách số vòng lặp và nhấn **Duyệt và chạy**.
+```sh
+rarp --project "C:\path\to\target-repo" ui
+```
+
+Open the generated loopback URL (`http://127.0.0.1:<port>/ui/#token=<token>`) in a browser. The session token is securely preserved in browser `sessionStorage`.
+
+### Step 4: Plan and Execute a Goal
+
+1. Open the Web Dashboard and navigate to the **Goals & Plans** view.
+2. Provide a concrete objective, technical constraints, and acceptance criteria.
+3. Click **Request Analysis**. The Planner agent will inspect the codebase in read-only mode and draft a structured plan.
+4. Review the generated task breakdown, file write scopes, dependency waves, and automated verification commands.
+5. Select the worker adapter (Codex or Antigravity), configure retry budgets, and click **Approve & Run**.
 
 ---
 
-## Quy trình hoạt động chi tiết
+## Detailed Operational Workflows
 
-### 1. Lập kế hoạch theo mục tiêu và phê duyệt
+### 1. Goal-Driven Planning and Explicit Approval
 
-- **Phân tích chỉ đọc**: Quá trình phân tích kế hoạch được thực hiện trong môi trường sandbox chỉ đọc. Planner không được phép sửa đổi tập tin hay chạy các lệnh thay đổi trạng thái trước khi có sự chấp thuận của người dùng.
-- **Quản lý phiên bản kế hoạch (Revisions)**: Mọi điều chỉnh về mục tiêu, danh sách tác vụ hoặc cấu hình phân bổ đều tạo ra một phiên bản kế hoạch mới kèm mã băm (hash) toàn vẹn.
-- **Xử lý phản hồi từ Worker (`waiting_input`)**: Khi gặp điểm chưa rõ ràng, Worker có thể gửi câu hỏi dạng `rarp_input`. Kế hoạch tạm dừng và chuyển sang trạng thái chờ đầu vào. Người dùng có thể trả lời thông qua Web UI hoặc dòng lệnh:
+- **Read-Only Sandbox**: Codebase discovery during the planning phase is executed strictly within a read-only environment. Planner agents cannot alter files or execute stateful commands prior to operator approval.
+- **Plan Revisions**: Any updates to goals, task scopes, or allocation parameters produce an immutable plan revision tagged with a content hash.
+- **Human Input Handling (`waiting_input`)**: If an agent encounters ambiguous requirements, it raises a `rarp_input` question. Execution pauses and enters the `waiting_input` state. Operators can answer directly via the Web UI or CLI:
   ```sh
-  rarp --project "C:\duong-dan\du-an" plan answer PLAN_ID --file answer.json
-  rarp --project "C:\duong-dan\du-an" plan resume PLAN_ID
+  rarp --project "C:\path\to\target-repo" plan answer PLAN_ID --file answer.json
+  rarp --project "C:\path\to\target-repo" plan resume PLAN_ID
   ```
-  Nội dung tệp `answer.json` bao gồm `{ taskId, requestId, answer }`.
+  The `answer.json` payload requires `{ taskId, requestId, answer }`.
 
-### 2. Điều phối đa tác tử và quản lý hàng đợi
+### 2. Multi-Agent Scheduling and Queue Management
 
-- **Quản lý khe thực thi (Execution Slots)**: Tham số `--max-workers` quy định số lượng tác vụ được phép chạy đồng thời (từ 1 đến 16). Mỗi khe bao gồm toàn bộ chu kỳ: phân bổ -> thực thi -> kiểm thử -> chờ đánh giá -> nghiệm thu.
-- **Giới hạn số lượng Reviewer**: Tham số `--max-reviewers` giới hạn số phiên đánh giá thực sự diễn ra song song để tránh làm quá tải tài nguyên API.
-- **Chống xung đột phạm vi (Scope Conflict)**: Hai tác vụ có phạm vi tập tin hoặc thư mục giao thoa sẽ không được phân bổ chạy cùng thời điểm. Tác vụ đến sau sẽ tự động nằm trong hàng đợi chờ tác vụ trước giải phóng phạm vi.
-- **Quản lý phụ thuộc (Dependencies)**: Tác vụ phụ thuộc chỉ bắt đầu khi tất cả tác vụ tiên quyết đã được nghiệm thu (`accepted`) và tích hợp hoàn tất vào mã nguồn chung.
+- **Execution Slots**: The `--max-workers` flag sets the concurrent task allocation limit (1 to 16). Each slot tracks the complete lifecycle: assignment, execution, local checks, review, and acceptance.
+- **Reviewer Throttling**: The `--max-reviewers` flag bounds concurrent evaluation sessions to avoid upstream provider rate limits.
+- **Scope Overlap Prevention**: Tasks targeting overlapping directory or file paths are prevented from running concurrently. Subsequent tasks queue automatically until active file scopes are released.
+- **Dependency Enforcement**: Dependent tasks remain queued until prerequisite tasks achieve `accepted` status and integrate cleanly into the repository.
 
-### 3. Cô lập môi trường và tích hợp nguyên tử
+### 3. Environment Isolation and Atomic Integration
 
-- **Git Worktree riêng biệt**: Mỗi tác vụ hoạt động trên một nhánh và thư mục worktree riêng biệt được tạo từ điểm commit mới nhất của nhánh chính.
-- **Kiểm tra cục bộ tự động**: Sau khi Worker hoàn tất mã nguồn và tạo commit, runtime tự động chạy các lệnh kiểm thử được chỉ định trong cấu hình (ví dụ: `npm test`, `npm run build`).
-- **Nghiệm thu độc lập**: Tác tử Reviewer kiểm tra sự thay đổi và kết quả kiểm thử. Khi đạt yêu cầu, tác vụ chuyển sang trạng thái `accepted`.
-- **Tích hợp tuần tự (Sequential Integration)**:
+- **Dedicated Git Worktrees**: Every task executes within an independent Git worktree branched from the latest main commit.
+- **Automated Verification**: Once a worker commits candidate code, the runtime executes configured verification commands (e.g., `npm test`, `npm run build`) in the worktree.
+- **Independent Review**: Reviewer agents evaluate git diffs and test logs against acceptance criteria. Upon verification, the task is marked `accepted`.
+- **Sequential Integration**:
   ```sh
-  rarp --project "C:\duong-dan\du-an" task integrate TASK_ID
+  rarp --project "C:\path\to\target-repo" task integrate TASK_ID
   ```
-  Runtime tiến hành hợp nhất nhánh công việc vào một worktree tích hợp tạm thời, chạy lại toàn bộ bộ kiểm thử của dự án trên kết quả hợp nhất. Chỉ khi tất cả kiểm tra đều thành công, nhánh chính mới được cập nhật chuyển tiếp (fast-forward).
+  The runtime merges candidate branches into an ephemeral integration worktree, replays the target project's full test suite, and fast-forwards the main branch upon confirmation.
 
-### 4. Khôi phục sau sự cố
+### 4. Crash Recovery and State Leases
 
-- **Cơ chế giữ khóa (Lease Mechanism)**: Tiến trình runtime duy trì khóa phiên với thời hạn 15 giây.
-- **Phục hồi trạng thái sau khi dừng đột ngột**: Nếu hệ thống gặp sự cố mất điện hoặc tiến trình bị buộc dừng:
+- **Heartbeat Lease**: The active daemon maintains a 15-second heartbeat lease in SQLite.
+- **Recovery After Unexpected Termination**: If host processes terminate abruptly due to crash or power loss:
   ```sh
-  rarp --project "C:\duong-dan\du-an" runtime recover
-  rarp --project "C:\duong-dan\du-an" runtime start
+  rarp --project "C:\path\to\target-repo" runtime recover
+  rarp --project "C:\path\to\target-repo" runtime start
   ```
-- **Xử lý tác vụ dở dang**: Lệnh `recover` sẽ rà soát cơ sở dữ liệu, chuyển các tác vụ đang thực thi dở dang thành `interrupted` hoặc `failed`, đồng thời bảo toàn các nhánh worktree và các tác vụ đã `accepted`. Sau khi khởi động lại, bộ lập lịch sẽ ở trạng thái tạm dừng để người dùng kiểm tra trước khi kích hoạt `resume`.
+- **Task State Reconciliation**: The `recover` command reconciles unfinished tasks to `interrupted` or `failed` while preserving completed worktrees and `accepted` states. The scheduler boots into a paused state to permit operator review before calling `resume`.
 
 ---
 
-## Tra cứu lệnh CLI
+## CLI Reference
 
-Mọi lệnh đều hỗ trợ cờ toàn cục `--project <path>` (mặc định là thư mục hiện tại) và `--json` (xuất dữ liệu định dạng JSON).
+All commands accept global flags `--project <path>` (defaults to current working directory) and `--json` (structured output for automation).
 
-### Nhóm chẩn đoán và thông tin
+### Diagnostics and Metadata
 
-| Lệnh | Mô tả |
+| Command | Description |
 | :--- | :--- |
-| `rarp doctor` | Chẩn đoán toàn diện môi trường thực thi (chỉ đọc, không gọi model). |
-| `rarp about` | Hiển thị thông tin phiên bản và các tính năng chính. |
-| `rarp status` | Xem trạng thái cơ sở dữ liệu và số lượng tác vụ hiện tại. |
-| `rarp events [--after <id>]` | Truy vấn nhật ký sự kiện, hỗ trợ đọc phân trang qua con trỏ `after`. |
+| `rarp doctor` | Performs comprehensive, read-only diagnostic checks on prerequisites and adapters. |
+| `rarp about` | Displays version information and supported capabilities. |
+| `rarp status` | Summarizes database connectivity, plan states, and active task counts. |
+| `rarp events [--after <id>]` | Queries the event sourcing journal with cursor-based pagination. |
 
-### Nhóm điều khiển Runtime Daemon
+### Runtime Daemon Management
 
-| Lệnh | Mô tả |
+| Command | Description |
 | :--- | :--- |
-| `rarp runtime start` | Khởi động tiến trình daemon nền (`--max-workers`, `--max-reviewers`, `--manager-profile`, `--codex`, `--agy`). |
-| `rarp runtime status` | Xem trạng thái hoạt động của daemon, các tác vụ đang chạy và hàng đợi. |
-| `rarp runtime stop` | Dừng an toàn tiến trình daemon và toàn bộ cây tiến trình liên quan. |
-| `rarp runtime pause` | Tạm dừng nhận tác vụ mới vào bộ lập lịch. |
-| `rarp runtime resume` | Tiếp tục bộ lập lịch tác vụ. |
-| `rarp runtime recover` | Phục hồi trạng thái dữ liệu sau sự cố dừng đột ngột. |
-| `rarp runtime queue` | Xem danh sách các điều phối đang nằm trong hàng đợi. |
-| `rarp runtime cancel [--task <id>]` | Hủy một tác vụ cụ thể hoặc hủy toàn bộ tác vụ đang chờ. |
-| `rarp ui` | In ra đường dẫn truy cập Web Dashboard kèm token bảo mật. |
+| `rarp runtime start` | Launches the runtime daemon (`--max-workers`, `--max-reviewers`, `--manager-profile`, `--codex`, `--agy`). |
+| `rarp runtime status` | Inspects daemon health, active worker slots, and scheduler queues. |
+| `rarp runtime stop` | Gracefully shuts down the daemon and terminates managed worker process trees. |
+| `rarp runtime pause` | Pauses scheduler dispatch of pending tasks. |
+| `rarp runtime resume` | Resumes task dispatch in the scheduler. |
+| `rarp runtime recover` | Reconciles dangling task states and stale locks after unexpected process terminations. |
+| `rarp runtime queue` | Lists active orchestrations and queued tasks. |
+| `rarp runtime cancel [--task <id>]` | Cancels a specific task or aborts all pending work. |
+| `rarp ui` | Emits the Web Dashboard access URL with embedded authentication token. |
 
-### Nhóm quản lý Mục tiêu và Kế hoạch
+### Goals and Plans
 
-| Lệnh | Mô tả |
+| Command | Description |
 | :--- | :--- |
-| `rarp goal create --file <path>` | Tạo mục tiêu mới từ tệp JSON. |
-| `rarp goal list` | Liệt kê danh sách các mục tiêu đã ghi nhận. |
-| `rarp goal show <id>` | Xem chi tiết nội dung của một mục tiêu. |
-| `rarp plan list` | Liệt kê toàn bộ các kế hoạch thực thi. |
-| `rarp plan show <id>` | Xem chi tiết cấu trúc tác vụ của kế hoạch. |
-| `rarp plan analyze <id>` | Kích hoạt tác tử phân tích mã nguồn và lập kế hoạch chi tiết. |
-| `rarp plan approve <id> [--file <path>]` | Phê duyệt kế hoạch kèm cấu hình phân bổ worker. |
-| `rarp plan reject <id>` | Từ chối bản kế hoạch. |
-| `rarp plan pause <id>` | Tạm dừng kế hoạch đang chạy. |
-| `rarp plan resume <id>` | Tiếp tục kế hoạch đã tạm dừng. |
-| `rarp plan answer <id> --file <path>` | Gửi câu trả lời cho yêu cầu đầu vào từ tác tử Worker. |
+| `rarp goal create --file <path>` | Creates a new high-level objective from a JSON specification. |
+| `rarp goal list` | Lists all registered goals. |
+| `rarp goal show <id>` | Displays the detailed specification of a goal. |
+| `rarp plan list` | Lists all execution plans across revisions. |
+| `rarp plan show <id>` | Inspects the task DAG, waves, and validation rules of a plan. |
+| `rarp plan analyze <id>` | Triggers read-only agent analysis to decompose a goal into a plan. |
+| `rarp plan approve <id> [--file <path>]` | Approves a plan and sets execution allocation parameters. |
+| `rarp plan reject <id>` | Rejects a drafted plan revision. |
+| `rarp plan pause <id>` | Suspends execution of an active plan. |
+| `rarp plan resume <id>` | Resumes a suspended plan. |
+| `rarp plan answer <id> --file <path>` | Submits operator answers to a worker agent's clarification request. |
 
-### Nhóm quản lý Tác vụ và Luồng làm việc
+### Tasks and Workflows
 
-| Lệnh | Mô tả |
+| Command | Description |
 | :--- | :--- |
-| `rarp task create` | Tạo tác vụ thủ công (`--title`, `--actor`, `--assignee`, `--body`, `--depends-on`). |
-| `rarp task list [--status <name>]` | Danh sách tác vụ, có thể lọc theo trạng thái. |
-| `rarp task show <id>` | Xem chi tiết tác vụ, lịch sử nộp bài và đánh giá. |
-| `rarp task workspace <id>` | Xem thông tin đường dẫn Git worktree của tác vụ. |
-| `rarp task integrate <id>` | Tích hợp tác vụ đã nghiệm thu vào nhánh chính của kho lưu trữ. |
-| `rarp workflow run <taskId>` | Chạy quy trình làm việc độc lập (`--isolated`, `--adapter`, `--scope`, `--check-json`, `--max-rounds`). |
+| `rarp task create` | Manually constructs a task (`--title`, `--actor`, `--assignee`, `--body`, `--depends-on`). |
+| `rarp task list [--status <name>]` | Lists tasks with optional status filtering. |
+| `rarp task show <id>` | Inspects task metadata, execution history, and review verdicts. |
+| `rarp task workspace <id>` | Outputs the absolute path to the task's isolated Git worktree. |
+| `rarp task integrate <id>` | Integrates an accepted task branch into the main branch. |
+| `rarp workflow run <taskId>` | Executes an ad-hoc isolated workflow (`--isolated`, `--adapter`, `--scope`, `--check-json`, `--max-rounds`). |
 
 ---
 
-## Bảo mật và Kiểm soát quyền
+## Security and Access Control
 
-1. **Giới hạn kết nối mạng cục bộ**:
-   - Runtime Daemon chỉ lắng nghe duy nhất trên giao diện mạng vòng `127.0.0.1`.
-   - Không hỗ trợ kết nối từ xa. Mọi yêu cầu HTTP/SSE đều bắt buộc mang theo token xác thực ngẫu nhiên được tạo ra tại thời điểm khởi động daemon.
-2. **Quyền hạn của tác tử Planner và Reviewer**:
-   - Được ép buộc chạy trong cấu hình sandbox chỉ đọc.
-   - Không thể tự ý chạy các lệnh shell hoặc chỉnh sửa mã nguồn dự án trong giai đoạn lập kế hoạch và đánh giá.
-3. **Quyền hạn của tác tử Worker**:
-   - Mặc định, các tác tử hoạt động dưới quyền hạn sandbox chuẩn của công cụ nền tảng.
-   - Khi sử dụng Antigravity CLI, cờ bỏ qua kiểm tra quyền (`--dangerously-skip-permissions`) chỉ được bổ sung khi và chỉ khi người dùng chủ động lựa chọn tùy chọn cấp toàn quyền trong bước duyệt kế hoạch.
-4. **Bảo vệ khóa bí mật (Secrets Protection)**:
-   - Cơ sở dữ liệu và nhật ký sự kiện của Rarp tuyệt đối không lưu trữ khóa API hoặc thông tin đăng nhập cá nhân.
-   - Các tác tử kế thừa cấu hình chứng thực từ phiên đăng nhập cục bộ sẵn có của Codex CLI hoặc Antigravity CLI trên máy của người dùng.
+1. **Loopback Binding & Token Authentication**:
+   - The Runtime Daemon binds strictly to `127.0.0.1`.
+   - External networking is disabled. All HTTP and SSE endpoints require bearer tokens generated ephemerally at daemon startup.
+2. **Planner and Reviewer Sandboxing**:
+   - Planner and Reviewer agents execute under strict read-only sandbox configurations.
+   - Shell command execution and file write operations are prohibited during planning and review phases.
+3. **Worker Execution Boundaries**:
+   - Worker agents run within standard tool sandbox boundaries by default.
+   - For Antigravity CLI, elevated execution flags (`--dangerously-skip-permissions`) are passed only if explicitly approved by the human operator during plan review.
+4. **Credential Isolation**:
+   - Rarp state databases and event logs do not store API keys or user passwords.
+   - Agents inherit authenticated session contexts from the host system's existing CLI profiles.
 
 ---
 
-## Phát triển và Kiểm thử
+## Development and Verification
 
-### Cài đặt môi trường phát triển
+### Setting Up Development Environment
 
 ```sh
 git clone https://github.com/yoyozero10/rarp.git
@@ -290,32 +295,32 @@ cd rarp
 npm ci
 ```
 
-### Các tập lệnh kiểm tra chất lượng
+### Verification Scripts
 
-Kiểm tra kiểu dữ liệu tĩnh:
+Run static type checking:
 ```sh
 npm run typecheck
 ```
 
-Biên dịch ứng dụng:
+Compile TypeScript source files:
 ```sh
 npm run build
 ```
 
-Chạy toàn bộ bộ kiểm thử tự động:
+Run unit and integration test suites:
 ```sh
 npm test
 ```
 
-Kiểm tra tính toàn vẹn của gói đóng gói trong môi trường độc lập:
+Execute end-to-end package verification in an isolated temporary environment:
 ```sh
 npm run test:package
 ```
 
-Tập lệnh `test:package` sẽ đóng gói bản build, cài đặt dependencies vào thư mục tạm độc lập, khởi tạo runtime và kiểm tra vòng lặp Planner -> Worker -> Review -> Integration bằng fixtures giả lập.
+The `test:package` script packages the build, installs it into an isolated temporary directory, initializes a clean runtime instance, and verifies the full Planner -> Worker -> Review -> Integration cycle against mock fixtures.
 
 ---
 
-## Giấy phép
+## License
 
-Dự án này là phần mềm nội bộ (Private / Proprietary). Mọi quyền được bảo lưu.
+This project is licensed under the MIT License.
